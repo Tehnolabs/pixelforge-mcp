@@ -1,0 +1,36 @@
+# PixelForge MCP Server Configuration
+# Copy this file to config.yaml and customize as needed
+
+# Image generation settings
+imagen:
+  # Google API Key (can also set via GOOGLE_API_KEY environment variable)
+  api_key: null
+
+  # Default model for generation
+  default_model: "gemini-2.5-flash-image"
+
+  # Default aspect ratio for images
+  default_aspect_ratio: "1:1"
+
+  # Default temperature (creativity) level
+  default_temperature: 0.7
+
+  # Safety filter setting
+  safety_setting: "preset:strict"
+
+# Storage configuration
+storage:
+  # Directory for generated images
+  output_dir: "./generated_images"
+
+  # S3 storage (optional)
+  use_s3: false
+  s3_bucket: null
+  s3_prefix: ""
+
+# Server configuration
+server:
+  name: "pixelforge-mcp"
+  version: "1.0.0"
+  log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  timeout: 120  # CLI command timeout in seconds
