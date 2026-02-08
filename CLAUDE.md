@@ -1,4 +1,4 @@
-# PixelForge MCP - AI Agent Guide
+# PixelForge MCP - Development Guide
 
 MCP server for AI-powered image generation, editing, and analysis using Google's Gemini models.
 
@@ -99,7 +99,7 @@ Any of these environment variables will work:
 |------|-------------|
 | `generate_image` | Generate images from text (model switching, 10 aspect ratios, temperature control) |
 | `edit_image` | Modify existing images with text prompts |
-| `analyze_image` | Get AI-powered image descriptions |
+| `analyze_image` | Get AI-powered image descriptions (supports custom analysis prompts) |
 | `list_available_models` | Model capabilities and selection guidance |
 | `get_server_info` | Server configuration and status |
 
@@ -140,3 +140,103 @@ export PATH="$HOME/.local/bin:$PATH"
 - [Repository](https://github.com/tehnolabs/pixelforge-mcp)
 - [Google AI Studio](https://aistudio.google.com/apikey)
 - [MCP Protocol](https://modelcontextprotocol.io)
+
+---
+
+## Architecture
+
+```
+src/pixelforge_mcp/
+├── __init__.py          # Package init
+├── config.py            # Pydantic config, YAML loading, VERSION string
+├── server.py            # FastMCP server — 5 async tool definitions + helpers
+└── utils/
+    ├── api_client.py    # ImagenAPIClient — wraps gemini-imagen library
+    ├── cli.py           # ImagenCLI — subprocess-based fallback (legacy)
+    └── validation.py    # Pydantic input models with validation rules
+```
+
+**Request flow:** MCP client → `server.py` (tool handler) → `validation.py` (validates input) → `api_client.py` (calls Gemini API) → response back to client.
+
+**Key files for most changes:**
+- `validation.py` — input models and constraints (Pydantic)
+- `api_client.py` — API interaction logic
+- `server.py` — tool registration and response formatting
+- `config.py` — server configuration and version
+
+## Development Workflow
+
+### Branch naming
+
+- `feat/` — new features (e.g., `feat/custom-analysis-prompts`)
+- `fix/` — bug fixes (e.g., `fix/pypi-hero-image`)
+- `docs/` — documentation only (e.g., `docs/update-readme`)
+- `chore/` — maintenance (e.g., `chore/v0.1.3-hero-image`)
+
+### Commit conventions
+
+Use conventional commit prefixes:
+
+- `feat:` — new feature
+- `fix:` — bug fix
+- `chore:` — maintenance, version bumps
+- `docs:` — documentation changes
+- `test:` — adding or updating tests
+- `refactor:` — code restructuring without behavior change
+
+### PR process
+
+1. Branch from `main`
+2. Make changes, add tests
+3. Run all checks (see Code Style and Testing below)
+4. Open PR against `main` with a clear description
+
+## Adding or Modifying a Tool
+
+Every tool change touches 3 files in order:
+
+1. **`validation.py`** — Add or update the Pydantic input model (e.g., `AnalyzeImageInput`). This defines parameters, types, defaults, and validation rules.
+2. **`api_client.py`** — Add or update the corresponding method on `ImagenAPIClient` (e.g., `analyze_image()`). This handles the actual API call.
+3. **`server.py`** — Add or update the `@mcp.tool()` handler. This wires validation → API client → response formatting.
+
+Then add tests in `tests/unit/` covering the new validation rules and API client behavior.
+
+## Version Bumping
+
+Version lives in **two places** — both must be updated together:
+
+- `pyproject.toml` → `version = "X.Y.Z"` (line 3)
+- `src/pixelforge_mcp/config.py` → `version: str = Field("X.Y.Z", ...)` (line 55)
+
+**When to bump:** Ask the user before bumping. After bumping, add a CHANGELOG entry under the new version.
+
+## Code Style
+
+Configured in `pyproject.toml`:
+
+| Tool | Purpose | Command |
+|------|---------|---------|
+| [Black](https://black.readthedocs.io/) | Formatting (line-length 88) | `black src/ tests/` |
+| [Ruff](https://docs.astral.sh/ruff/) | Linting (E/F/I/N/W rules) | `ruff check src/ tests/` |
+| [MyPy](https://mypy.readthedocs.io/) | Type checking (strict mode) | `mypy src/` |
+
+Run all three before opening a PR.
+
+## Testing
+
+```bash
+# Unit tests (no API key needed)
+pytest tests/unit/ -v
+
+# Specific test file
+pytest tests/unit/test_validation.py -v
+
+# Integration tests (requires GOOGLE_API_KEY)
+pytest tests/integration/ -v
+```
+
+Test files mirror source structure:
+- `test_validation.py` — input validation rules
+- `test_api_client.py` — API client behavior (mocked)
+- `test_config.py` — configuration loading
+- `test_cli.py` — CLI wrapper
