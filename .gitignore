@@ -47,6 +47,9 @@ output/
 *.jpeg
 *.webp
 
+# Allow doc assets
+!docs/assets/**
+
 # Testing
 .pytest_cache/
 .coverage
