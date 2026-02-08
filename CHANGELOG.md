@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-02-08
+
+### Changed
+
+- Rewrote README.md with PyPI installation, tool documentation, and badges
+- Rewrote CLAUDE.md as a concise AI agent integration guide
+- Rewrote docs/configuration.md with PyPI-first install and 3 configuration methods
+- Added CONTRIBUTING.md with development setup, coding standards, and PR process
+- Added CHANGELOG.md following Keep a Changelog format
+- Fixed version references from 1.0.0 to 0.1.0
+
 ## [0.1.0] - 2026-02-08
 
 ### Added
@@ -24,5 +35,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 72 unit tests with full coverage
 - PyPI package distribution via pipx
 
-[Unreleased]: https://github.com/tehnolabs/pixelforge-mcp/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/tehnolabs/pixelforge-mcp/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/tehnolabs/pixelforge-mcp/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/tehnolabs/pixelforge-mcp/releases/tag/v0.1.0
