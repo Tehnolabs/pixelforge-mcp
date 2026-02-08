@@ -5,7 +5,7 @@
 # PixelForge MCP
 
 <p align="center">
-  <img src="docs/assets/hero.png" alt="PixelForge MCP" width="600">
+  <img src="https://raw.githubusercontent.com/Tehnolabs/pixelforge-mcp/main/docs/assets/hero.png" alt="PixelForge MCP" width="600">
 </p>
 
 An MCP server for AI-powered image generation, editing, and analysis using Google's Gemini models.
