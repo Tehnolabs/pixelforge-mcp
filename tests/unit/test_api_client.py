@@ -5,7 +5,11 @@ from pathlib import Path
 from unittest.mock import Mock, AsyncMock, patch
 from PIL import Image
 
-from pixelforge_mcp.utils.api_client import GenerationResult, ImagenAPIClient
+from pixelforge_mcp.utils.api_client import (
+    DEFAULT_ANALYSIS_PROMPT,
+    GenerationResult,
+    ImagenAPIClient,
+)
 
 
 class TestGenerationResult:
@@ -216,9 +220,35 @@ class TestImagenAPIClient:
         assert result.data["analysis"] == "A beautiful sunset over mountains"
         assert str(image_path) in result.data["image_path"]
 
-        # Verify generate was called with output_text=True
+        # Verify generate was called with default prompt and output_text=True
         call_kwargs = mock_generator.generate.call_args[1]
-        assert "Describe this image" in call_kwargs["prompt"]
+        assert call_kwargs["prompt"] == DEFAULT_ANALYSIS_PROMPT
+        assert call_kwargs["input_images"] == [str(image_path)]
+        assert call_kwargs["output_text"] is True
+
+    @pytest.mark.asyncio
+    @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
+    async def test_analyze_with_custom_prompt(self, mock_generator_class, tmp_path):
+        """Test image analysis with a custom prompt."""
+        mock_generator = Mock()
+        mock_result = Mock()
+        mock_result.text = "Text found: Hello World"
+        mock_generator.generate = AsyncMock(return_value=mock_result)
+        mock_generator_class.return_value = mock_generator
+
+        client = ImagenAPIClient()
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        custom_prompt = "Extract all visible text from this image"
+        result = await client.analyze(image_path, prompt=custom_prompt)
+
+        assert result.success is True
+        assert result.output == "Text found: Hello World"
+
+        # Verify custom prompt was used instead of default
+        call_kwargs = mock_generator.generate.call_args[1]
+        assert call_kwargs["prompt"] == custom_prompt
         assert call_kwargs["input_images"] == [str(image_path)]
         assert call_kwargs["output_text"] is True
 

@@ -10,6 +10,10 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_ANALYSIS_PROMPT = (
+    "Describe this image in detail, including objects, colors, composition, and mood."
+)
+
 
 @dataclass
 class GenerationResult:
@@ -172,11 +176,14 @@ class ImagenAPIClient:
                 error=str(e),
             )
 
-    async def analyze(self, image_path: Path) -> GenerationResult:
+    async def analyze(
+        self, image_path: Path, prompt: Optional[str] = None
+    ) -> GenerationResult:
         """Analyze an image and get a description.
 
         Args:
             image_path: Path to the image to analyze
+            prompt: Custom analysis prompt (uses DEFAULT_ANALYSIS_PROMPT if None)
 
         Returns:
             GenerationResult with analysis data
@@ -185,7 +192,7 @@ class ImagenAPIClient:
             generator = self._get_generator()
 
             result = await generator.generate(
-                prompt="Describe this image in detail, including objects, colors, composition, and mood.",
+                prompt=prompt or DEFAULT_ANALYSIS_PROMPT,
                 input_images=[str(image_path)],
                 output_text=True,
             )

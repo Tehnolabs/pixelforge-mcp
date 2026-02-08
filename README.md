@@ -150,11 +150,18 @@ Get an AI-powered description and analysis of an image.
 
 **Parameters:**
 - `image_path` (required): Path to the image to analyze
+- `prompt` (optional): Custom analysis prompt — directs the AI to focus on specific aspects instead of giving a general description
 
 **Example prompts:**
 > Analyze this image and describe what you see
 
 > What's in this screenshot?
+
+> Extract all visible text from this image (OCR)
+
+> Evaluate this image for web accessibility — describe alt text, contrast issues, and readability
+
+> List the dominant colors and their approximate hex values in this design
 
 ### list_available_models
 
