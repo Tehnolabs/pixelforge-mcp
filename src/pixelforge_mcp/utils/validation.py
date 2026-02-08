@@ -132,6 +132,23 @@ class AnalyzeImageInput(BaseModel):
     """Input validation for image analysis."""
 
     image_path: str = Field(..., description="Path to the image to analyze")
+    prompt: Optional[str] = Field(
+        None,
+        description="Custom analysis prompt (default: general description)",
+    )
+
+    @field_validator("prompt")
+    @classmethod
+    def validate_prompt(cls, v: Optional[str]) -> Optional[str]:
+        """Validate optional analysis prompt."""
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            raise ValueError("Prompt cannot be empty")
+        if len(v) > 2000:
+            raise ValueError("Prompt too long (max 2000 characters)")
+        return v
 
     @field_validator("image_path")
     @classmethod

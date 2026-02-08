@@ -269,27 +269,51 @@ async def edit_image(
 
 
 @mcp.tool()
-async def analyze_image(image_path: str) -> dict:
+async def analyze_image(image_path: str, prompt: Optional[str] = None) -> dict:
     """Analyze an image and get a detailed description.
 
     Args:
         image_path: Path to the image to analyze
+        prompt: Custom analysis prompt. If not provided, returns a general
+            description of the image. Use this to focus the analysis on
+            specific aspects.
 
     Returns:
         Dictionary with analysis results
 
     Example:
+        # General description (default)
         analyze_image(image_path="/path/to/photo.jpg")
+
+        # OCR / text extraction
+        analyze_image(
+            image_path="/path/to/screenshot.png",
+            prompt="Extract all visible text from this image"
+        )
+
+        # Accessibility description
+        analyze_image(
+            image_path="/path/to/photo.jpg",
+            prompt="Write an alt-text description for accessibility"
+        )
+
+        # Color palette extraction
+        analyze_image(
+            image_path="/path/to/design.png",
+            prompt="List the dominant colors and their approximate hex values"
+        )
     """
     logger.info(f"Analyzing image: {image_path}")
 
     try:
         # Validate inputs
-        inputs = AnalyzeImageInput(image_path=image_path)
+        inputs = AnalyzeImageInput(image_path=image_path, prompt=prompt)
 
         # Execute analysis
         client = get_api_client()
-        result = await client.analyze(Path(inputs.image_path))
+        result = await client.analyze(
+            Path(inputs.image_path), prompt=inputs.prompt
+        )
 
         # Format response
         if result.success and result.data:

@@ -243,6 +243,69 @@ class TestAnalyzeImageInput:
             input_data = AnalyzeImageInput(image_path=str(image_path))
             assert Path(input_data.image_path).suffix.lower() == ext
 
+    def test_none_prompt_accepted(self, tmp_path):
+        """Test None prompt is accepted (uses default)."""
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        input_data = AnalyzeImageInput(image_path=str(image_path), prompt=None)
+        assert input_data.prompt is None
+
+    def test_valid_custom_prompt(self, tmp_path):
+        """Test valid custom prompt is accepted."""
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        input_data = AnalyzeImageInput(
+            image_path=str(image_path),
+            prompt="Extract all text from this image",
+        )
+        assert input_data.prompt == "Extract all text from this image"
+
+    def test_prompt_whitespace_stripped(self, tmp_path):
+        """Test prompt whitespace is stripped."""
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        input_data = AnalyzeImageInput(
+            image_path=str(image_path), prompt="  some prompt  "
+        )
+        assert input_data.prompt == "some prompt"
+
+    def test_empty_prompt_rejected(self, tmp_path):
+        """Test empty prompt string is rejected."""
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        with pytest.raises(ValidationError, match="Prompt cannot be empty"):
+            AnalyzeImageInput(image_path=str(image_path), prompt="")
+
+    def test_whitespace_only_prompt_rejected(self, tmp_path):
+        """Test whitespace-only prompt is rejected."""
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        with pytest.raises(ValidationError, match="Prompt cannot be empty"):
+            AnalyzeImageInput(image_path=str(image_path), prompt="   ")
+
+    def test_long_prompt_rejected(self, tmp_path):
+        """Test prompt over 2000 characters is rejected."""
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        with pytest.raises(ValidationError, match="Prompt too long"):
+            AnalyzeImageInput(image_path=str(image_path), prompt="a" * 2001)
+
+    def test_max_length_prompt_accepted(self, tmp_path):
+        """Test prompt at exactly 2000 characters is accepted."""
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        input_data = AnalyzeImageInput(
+            image_path=str(image_path), prompt="a" * 2000
+        )
+        assert len(input_data.prompt) == 2000
+
 
 class TestAspectRatios:
     """Tests for aspect ratio constants."""
