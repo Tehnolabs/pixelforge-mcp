@@ -134,7 +134,7 @@ storage:
 
 server:
   name: "pixelforge-mcp"
-  version: "0.1.1"
+  version: "0.1.2"
   log_level: "INFO"
 ```
 

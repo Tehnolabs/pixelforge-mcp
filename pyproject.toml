@@ -1,6 +1,6 @@
 [project]
 name = "pixelforge-mcp"
-version = "0.1.1"
+version = "0.1.2"
 description = "AI-powered image generation MCP server with multi-model support"
 authors = [{name = "Ahmed Al-Eryani", email = "ahmed@tehnolabs.com"}]
 readme = "README.md"
