@@ -15,7 +15,7 @@ which pixelforge-mcp
 
 ## Client Configuration
 
-### Option 1: Claude Code CLI (Recommended)
+### Claude Code (Recommended)
 
 ```bash
 claude mcp add pixelforge --scope user \
@@ -25,7 +25,55 @@ claude mcp add pixelforge --scope user \
 
 This adds PixelForge to `~/.claude.json`, making it available in all your projects.
 
-### Option 2: Claude Desktop
+### Cursor
+
+Add to `.cursor/mcp.json` in your project root (or global config):
+
+```json
+{
+  "mcpServers": {
+    "pixelforge": {
+      "command": "pixelforge-mcp",
+      "env": {
+        "GOOGLE_API_KEY": "your-api-key-here"
+      }
+    }
+  }
+}
+```
+
+### VS Code
+
+```bash
+code --add-mcp '{"name":"pixelforge","command":"pixelforge-mcp","env":{"GOOGLE_API_KEY":"your-api-key-here"}}'
+```
+
+This adds PixelForge to your VS Code MCP configuration.
+
+### Windsurf
+
+Add to `~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "pixelforge": {
+      "command": "pixelforge-mcp",
+      "env": {
+        "GOOGLE_API_KEY": "your-api-key-here"
+      }
+    }
+  }
+}
+```
+
+### Kiro
+
+```bash
+kiro-cli mcp add --name pixelforge --scope global --command pixelforge-mcp --env "GOOGLE_API_KEY=your-api-key-here"
+```
+
+### Claude Desktop
 
 Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
@@ -44,7 +92,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 Quit and restart Claude Desktop for changes to take effect.
 
-### Option 3: Manual JSON Configuration
+### Other MCP Clients
 
 For other MCP-compatible clients, use this JSON structure:
 
@@ -114,6 +162,9 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 **MCP server not connecting**
 
 - Claude Code: Check `~/.claude.json` for correct configuration
+- Cursor: Check `.cursor/mcp.json` for correct configuration
+- VS Code: Verify MCP settings via `code --list-mcp`
+- Windsurf: Check `~/.codeium/windsurf/mcp_config.json` for correct configuration
 - Claude Desktop: Check `~/Library/Application Support/Claude/claude_desktop_config.json`
 - Verify installation: `pipx list | grep pixelforge`
 
