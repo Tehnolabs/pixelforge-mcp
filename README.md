@@ -1,141 +1,56 @@
+[![PyPI version](https://img.shields.io/pypi/v/pixelforge-mcp)](https://pypi.org/project/pixelforge-mcp/)
+[![Python versions](https://img.shields.io/pypi/pyversions/pixelforge-mcp)](https://pypi.org/project/pixelforge-mcp/)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+
 # PixelForge MCP
 
-A production-ready MCP (Model Context Protocol) server for AI-powered image generation, editing, and analysis.
-
-## About
-
-PixelForge MCP provides a seamless bridge between Claude AI and Google's Gemini image generation API, enabling AI assistants to create, modify, and analyze images through natural language.
+An MCP server for AI-powered image generation, editing, and analysis using Google's Gemini models.
 
 ## Features
 
-- 🎨 **Generate Images**: Create images from text descriptions with multi-model support
-- ✏️ **Edit Images**: Modify existing images using text prompts
-- 🔍 **Analyze Images**: Get AI-powered descriptions and insights
-- 🎯 **10 Aspect Ratios**: Support for 1:1, 16:9, 9:16, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 21:9
-- 🎚️ **Temperature Control**: Adjust creativity level (0.0-1.0)
-- ✅ **Full Test Coverage**: 72 unit tests, built with TDD approach
-- 🔒 **Type Safe**: Full Pydantic validation and type hints
+- Generate images from text prompts with per-request model switching
+- Edit existing images using natural language instructions
+- Analyze images with AI-powered descriptions
+- 10 aspect ratios and temperature control for creative flexibility
+- Async-first architecture with full Pydantic validation
+- Self-documenting tools with built-in model selection guidance
 
-## Prerequisites
+## Quick Start
 
-- **Python 3.10+**
-- **pipx** ([Installation guide](https://pipx.pypa.io/stable/installation/))
-- **Google API key** ([Get one here](https://aistudio.google.com/apikey))
+**Requirements:** Python 3.10+ and a [Google API key](https://aistudio.google.com/apikey)
 
-## Installation
-
-### Global Installation with pipx (Recommended)
+### Install
 
 ```bash
-pipx install .
-
-# Or from PyPI (once published)
 pipx install pixelforge-mcp
 ```
 
-This installs PixelForge globally in `~/.local/bin/`, making it accessible from any directory.
+### Configure
 
-### Reinstalling After Updates
-
-When the codebase is updated (e.g., after pulling new changes), reinstall to pick up improvements:
+**Claude Code:**
 
 ```bash
-# Navigate to project directory
-cd /path/to/pixelforge-mcp
-
-# Reinstall with --force flag
-pipx install --force .
+claude mcp add pixelforge --scope user -e GOOGLE_API_KEY="your-key" -- pixelforge-mcp
 ```
 
-The `--force` flag ensures the latest code is deployed globally, overwriting the previous installation.
-
-### For Development
-
-```bash
-git clone https://github.com/tehnolabs/pixelforge-mcp.git
-cd pixelforge-mcp
-
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -e ".[dev]"
-```
-
-### For AI Agents
-
-**AI agents (Claude Code, Claude Desktop, etc.)** should use the global installation method above. See [CLAUDE.md](CLAUDE.md) for comprehensive AI agent installation and configuration guide, including:
-- Step-by-step installation instructions
-- MCP client configuration examples
-- Model switching guidance
-- Troubleshooting common issues
-- Verification steps
-
-## Configuration
-
-1. **Get your Google API key** from [Google AI Studio](https://aistudio.google.com/apikey)
-
-2. **Set the API key** as an environment variable (supports multiple formats):
-
-```bash
-# Any of these will work:
-export GOOGLE_API_KEY="your-api-key-here"
-export GOOGLE_GENERATIVE_AI_API_KEY="your-api-key-here"
-export GEMINI_API_KEY="your-api-key-here"
-```
-
-3. **(Optional)** Create a config file at `config/config.yaml`:
-
-```yaml
-imagen:
-  api_key: "your-api-key"
-  default_model: "gemini-2.5-flash-image"
-  default_aspect_ratio: "1:1"
-  default_temperature: 0.7
-  safety_setting: "preset:strict"
-
-storage:
-  output_dir: "./generated_images"
-
-server:
-  name: "pixelforge-mcp"
-  version: "1.0.0"
-  log_level: "INFO"
-```
-
-## Usage with Claude
-
-PixelForge works with both Claude Code (CLI) and Claude Desktop (GUI app).
-
-### Claude Code (CLI)
-
-Add globally for all projects:
-
-```bash
-claude mcp add pixelforge --scope user -e GOOGLE_API_KEY="your-api-key-here" -- pixelforge-mcp
-```
-
-This adds to `/Users/[username]/.claude.json` (user-level global config, available in all your projects).
-
-### Claude Desktop (GUI App)
-
-Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
+**Claude Desktop** — edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "pixelforge": {
       "command": "pixelforge-mcp",
-      "args": [],
-      "env": {
-        "GOOGLE_API_KEY": "your-api-key-here"
-      }
+      "env": { "GOOGLE_API_KEY": "your-key" }
     }
   }
 }
 ```
 
-**Important:** Completely quit and restart Claude Desktop for changes to take effect.
+Restart Claude Desktop after saving.
 
-**Note:** After installing with pipx, the `pixelforge-mcp` command is globally available from `~/.local/bin/`.
+### Use
+
+Ask Claude to generate, edit, or analyze images — the tools are available automatically.
 
 ## Available Tools
 
@@ -148,17 +63,15 @@ Generate an image from a text prompt.
 - `output_filename` (optional): Custom filename
 - `aspect_ratio` (optional): Image dimensions (default: "1:1")
 - `temperature` (optional): Creativity level 0.0-1.0 (default: 0.7)
-- `model` (optional): Specific model to use
-- `safety_setting` (optional): Content safety filter (default: "preset:strict")
+- `model` (optional): Model to use (default: "gemini-2.5-flash-image")
+- `safety_setting` (optional): Content safety filter — "preset:strict" (default) or "preset:relaxed"
 
-**Example:**
-```python
-generate_image(
-    prompt="A futuristic city at sunset with flying cars",
-    aspect_ratio="16:9",
-    temperature=0.8
-)
-```
+**Example prompts:**
+> Generate an image of a futuristic city at sunset with flying cars in 16:9 widescreen
+
+> Create a watercolor painting of a cat sleeping on a bookshelf, use the pro model
+
+> Generate a minimalist logo for a coffee shop called "Bean There" in square format with high creativity
 
 ### edit_image
 
@@ -170,14 +83,12 @@ Edit an existing image with a text prompt.
 - `output_filename` (optional): Custom filename for edited image
 - `temperature` (optional): Creativity level 0.0-1.0 (default: 0.7)
 
-**Example:**
-```python
-edit_image(
-    prompt="Add a rainbow in the sky",
-    input_image_path="/path/to/image.png",
-    temperature=0.7
-)
-```
+**Example prompts:**
+> Edit this image and add a rainbow in the sky
+
+> Remove the background and replace it with a gradient
+
+> Make this photo look like it was taken during golden hour
 
 ### analyze_image
 
@@ -186,220 +97,112 @@ Get an AI-powered description and analysis of an image.
 **Parameters:**
 - `image_path` (required): Path to the image to analyze
 
-**Example:**
-```python
-analyze_image(image_path="/path/to/image.png")
-```
+**Example prompts:**
+> Analyze this image and describe what you see
+
+> What's in this screenshot?
 
 ### list_available_models
 
-List all available Gemini image generation models with detailed capabilities and metadata.
+List all available Gemini image generation models with capabilities and selection guidance.
 
-**Example:**
-```python
-list_available_models()
-```
+**Example prompts:**
+> What image generation models are available?
 
-**Returns:**
-```json
-{
-  "models": [
-    {
-      "name": "gemini-2.5-flash-image",
-      "nickname": "Nano Banana",
-      "speed": "fast",
-      "quality": "good",
-      "best_for": ["Quick iterations", "High-volume generation", ...],
-      "capabilities": {...}
-    },
-    {
-      "name": "gemini-3-pro-image-preview",
-      "nickname": "Gemini 3 Pro Image",
-      "speed": "moderate",
-      "quality": "excellent",
-      "best_for": ["Photorealistic outputs", "Complex scenes", ...],
-      "capabilities": {...}
-    }
-  ],
-  "recommendation": "Use gemini-2.5-flash-image for speed, gemini-3-pro-image-preview for quality"
-}
-```
+> Which model should I use for photorealistic images?
 
 ### get_server_info
 
-Get server configuration and status information including model switching capabilities.
+Get server configuration and status information.
 
-**Example:**
-```python
-get_server_info()
-```
+**Example prompts:**
+> Show me the PixelForge server configuration
+
+> What's the default model and output directory?
 
 ## Model Selection & Switching
 
-PixelForge supports **effortless model switching** on every API call. Choose the right model for your task:
+PixelForge supports **per-request model switching** — choose the right model for your task:
 
-### Available Models
+| Use case | Model | Why |
+|----------|-------|-----|
+| Fast iterations | `gemini-2.5-flash-image` (default) | Speed, lower cost |
+| High quality output | `gemini-3-pro-image-preview` | Photorealism, complex scenes |
+| Text in images | `gemini-3-pro-image-preview` | Legible text rendering |
+| High resolution (2K/4K) | `gemini-3-pro-image-preview` | Native high-res support |
 
-#### 1. **gemini-2.5-flash-image** (Default)
-- **Nickname:** Nano Banana
-- **Speed:** Fast ⚡
-- **Quality:** Good
-- **Best For:**
-  - Quick iterations and concept exploration
-  - High-volume batch generation
-  - Simple compositions and designs
-  - When speed matters more than perfection
+**Example prompts:**
+> Generate a quick concept sketch of a logo
 
-#### 2. **gemini-3-pro-image-preview**
-- **Nickname:** Gemini 3 Pro Image
-- **Speed:** Moderate
-- **Quality:** Excellent ✨
-- **Best For:**
-  - Photorealistic final outputs
-  - Complex multi-object scenes
-  - Legible text rendering in images
-  - Character consistency across images
-  - Multi-turn image editing workflows
-  - High-resolution outputs (2K/4K)
+Uses default fast model (`gemini-2.5-flash-image`).
 
-### How to Switch Models
+> Generate a photorealistic portrait with intricate details using the pro model in 16:9
 
-**Per-Request Switching** (Recommended):
+Switches to quality model (`gemini-3-pro-image-preview`).
 
-```python
-# Use fast model for iterations
-generate_image(
-    prompt="Quick concept sketch of a logo",
-    model="gemini-2.5-flash-image"
-)
-
-# Switch to quality model for final output
-generate_image(
-    prompt="Photorealistic portrait with intricate details",
-    model="gemini-3-pro-image-preview",
-    aspect_ratio="16:9"
-)
-```
-
-**Model Selection Decision Tree:**
-
-```
-Need text in images? → gemini-3-pro-image-preview
-Need high resolution (2K/4K)? → gemini-3-pro-image-preview
-Need complex multi-object scene? → gemini-3-pro-image-preview
-Need fast iterations? → gemini-2.5-flash-image (default)
-Just exploring concepts? → gemini-2.5-flash-image (default)
-```
-
-### Best Practices
-
-1. **Iteration Phase:** Use `gemini-2.5-flash-image` for rapid prototyping
-2. **Final Output:** Switch to `gemini-3-pro-image-preview` for production quality
-3. **Text Rendering:** Always use `gemini-3-pro-image-preview` for readable text
-4. **Cost Optimization:** Use faster model for volume, quality model only when needed
-5. **Check Capabilities:** Call `list_available_models()` to see detailed model metadata
-
-## Development
-
-### Run Unit Tests
-
-```bash
-pytest tests/unit/
-```
-
-### Run Integration Tests
-
-```bash
-export PATH="$PWD/venv/bin:$PATH"
-python test_integration.py
-```
-
-### Code Quality
-
-```bash
-# Format code
-black src/ tests/
-
-# Lint code
-ruff check src/ tests/
-
-# Type check
-mypy src/
-```
-
-## Requirements
-
-- Python 3.10 or higher
-- Google API key with Gemini API access
-- gemini-imagen Python library (installed automatically with dependencies)
-
-## Architecture
-
-PixelForge follows a clean, modular architecture:
-
-```
-pixelforge-mcp/
-├── src/pixelforge_mcp/
-│   ├── config.py         # Pydantic-based configuration management
-│   ├── server.py         # FastMCP server with 5 async tools
-│   └── utils/
-│       ├── api_client.py # Direct API client using gemini-imagen library
-│       └── validation.py # Input validation with Pydantic
-├── tests/
-│   └── unit/             # 72 unit tests (TDD approach)
-└── config/               # Configuration files
-```
-
-**Design Principles:**
-- **Type Safety**: Full Pydantic validation and type hints throughout
-- **Async-First**: All image operations use async/await for better performance
-- **Direct API Integration**: Uses gemini-imagen Python library (no CLI subprocess calls)
-- **Self-Contained**: No external dependencies beyond Python packages
-- **Separation of Concerns**: Clean layer separation (config, API client, validation, server)
-- **Test-Driven Development**: All code written with tests first
-- **DRY & KISS**: Simple, maintainable code without duplication
+**Best Practices:**
+1. Use `gemini-2.5-flash-image` (default) for rapid prototyping
+2. Switch to `gemini-3-pro-image-preview` for production quality
+3. Always use `gemini-3-pro-image-preview` for readable text in images
+4. Ask Claude to *"list available models"* for detailed model metadata
 
 ## Supported Aspect Ratios
 
-- `1:1` - Square (default)
-- `16:9` - Widescreen landscape
-- `9:16` - Mobile portrait
-- `2:3` - Classic portrait
-- `3:2` - Classic landscape
-- `3:4` - Portrait
-- `4:3` - Traditional landscape
-- `4:5` - Instagram portrait
-- `5:4` - Medium format
-- `21:9` - Ultrawide
+| Ratio | Description |
+|-------|-------------|
+| `1:1` | Square (default) |
+| `16:9` | Widescreen landscape |
+| `9:16` | Mobile portrait |
+| `2:3` | Classic portrait |
+| `3:2` | Classic landscape |
+| `3:4` | Portrait |
+| `4:3` | Traditional landscape |
+| `4:5` | Instagram portrait |
+| `5:4` | Medium format |
+| `21:9` | Ultrawide |
 
 ## Troubleshooting
 
-### Issue: "Invalid API key" or "Authentication failed"
+### "Invalid API key" or "Authentication failed"
 
 Double-check your Google API key is correct and has access to the Gemini API. Get a key at [Google AI Studio](https://aistudio.google.com/apikey).
 
-### Issue: "Server not starting"
+### "Command not found: pixelforge-mcp"
 
-Check that all dependencies are installed:
+Ensure the pipx bin directory is in your PATH:
 
 ```bash
-pip list | grep -E "(fastmcp|gemini-imagen|pydantic)"
+export PATH="$HOME/.local/bin:$PATH"
 ```
+
+### "Server not starting"
+
+Check that pixelforge-mcp is installed:
+
+```bash
+pipx list | grep pixelforge
+```
+
+## Documentation
+
+- [Configuration Guide](docs/configuration.md) — detailed setup and environment options
+- [Changelog](CHANGELOG.md) — version history
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code standards, and pull request guidelines.
 
 ## License
 
-AGPL-3.0 License - See LICENSE file for details
+[AGPL-3.0](LICENSE)
+
+## Acknowledgments
+
+Built with [FastMCP](https://github.com/jlowin/fastmcp), [Pydantic](https://docs.pydantic.dev/), and [gemini-imagen](https://github.com/aviadr1/gemini-imagen).
 
 ## Author
 
 Ahmed Al-Eryani @ Tehnolabs
-
-## Acknowledgments
-
-Built using:
-- [FastMCP](https://github.com/jlowin/fastmcp) - MCP server framework
-- [Pydantic](https://docs.pydantic.dev/) - Data validation
-- [gemini-imagen](https://github.com/aviadr1/gemini-imagen) - Google Gemini image generation Python library
 
 ---
 

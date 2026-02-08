@@ -1,58 +1,33 @@
-# MCP Server Configuration Instructions
+# Configuration Guide
 
 ## Installation
 
-### Step 1: Install Globally with pipx
-
 ```bash
-cd /path/to/pixelforge-mcp
-pipx install .
+pipx install pixelforge-mcp
 ```
 
-This installs PixelForge globally in `~/.local/bin/pixelforge-mcp`, making it accessible from any directory.
-
-### Step 2: Configure Claude Code MCP
-
-## Method 1: Using Claude Code CLI (Recommended)
-
-Add to Claude Code MCP configuration:
+Verify the installation:
 
 ```bash
-claude mcp add-json pixelforge '{
-  "type": "stdio",
-  "command": "pixelforge-mcp",
-  "env": {
-    "GOOGLE_API_KEY": "your-api-key-here"
-  }
-}'
+which pixelforge-mcp
+# Expected: ~/.local/bin/pixelforge-mcp
 ```
 
-Simple, clean, and truly global! No paths needed.
+## Client Configuration
 
-## Method 2: Using Project Directory (Development Only)
-
-For development, you can use the local venv:
+### Option 1: Claude Code CLI (Recommended)
 
 ```bash
-claude mcp add-json pixelforge '{
-  "type": "stdio",
-  "command": "/path/to/pixelforge-mcp/venv/bin/python",
-  "args": ["-m", "pixelforge_mcp.server"],
-  "env": {
-    "GOOGLE_API_KEY": "your-api-key-here",
-    "PATH": "/path/to/pixelforge-mcp/venv/bin:/usr/local/bin:/usr/bin:/bin"
-  }
-}'
+claude mcp add pixelforge --scope user \
+  -e GOOGLE_API_KEY="your-api-key-here" \
+  -- pixelforge-mcp
 ```
 
-**Note:** This method requires the PATH environment variable to include venv/bin.
+This adds PixelForge to `~/.claude.json`, making it available in all your projects.
 
-## Method 3: Manual Configuration
+### Option 2: Claude Desktop
 
-Edit your Claude Desktop config at:
-`~/Library/Application Support/Claude/claude_desktop_config.json`
-
-Add this configuration (after installing with pipx):
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
@@ -67,61 +42,83 @@ Add this configuration (after installing with pipx):
 }
 ```
 
-**Note:** The command is just `pixelforge-mcp` - no paths, no args, beautifully simple!
+Quit and restart Claude Desktop for changes to take effect.
 
-## Verify Installation
+### Option 3: Manual JSON Configuration
 
-After configuration, restart Claude and try:
+For other MCP-compatible clients, use this JSON structure:
 
+```json
+{
+  "type": "stdio",
+  "command": "pixelforge-mcp",
+  "env": {
+    "GOOGLE_API_KEY": "your-api-key-here"
+  }
+}
 ```
-"Generate an image of a sunset over mountains"
+
+## Environment Variables
+
+PixelForge checks these variables for your Google API key (in order):
+
+| Variable | Notes |
+|----------|-------|
+| `GOOGLE_API_KEY` | Standard, recommended |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | Alternative |
+| `GEMINI_API_KEY` | Alternative |
+
+Get a key at [Google AI Studio](https://aistudio.google.com/apikey). Ensure the key has Gemini API access enabled.
+
+## Optional: YAML Configuration File
+
+For advanced settings, create `config/config.yaml`:
+
+```yaml
+imagen:
+  default_model: "gemini-2.5-flash-image"
+  default_aspect_ratio: "1:1"
+  default_temperature: 0.7
+  safety_setting: "preset:strict"
+
+storage:
+  output_dir: "./generated_images"
+
+server:
+  name: "pixelforge-mcp"
+  version: "0.1.0"
+  log_level: "INFO"
 ```
 
-Claude should automatically use the pixelforge MCP server to generate the image.
-
-## Available Tools
-
-Once configured, Claude will have access to:
-
-1. **generate_image** - Create images from text
-2. **edit_image** - Modify existing images
-3. **analyze_image** - Get descriptions of images
-4. **list_available_models** - List Gemini models
-5. **get_server_info** - Get server configuration
+Environment variables always override YAML values.
 
 ## Troubleshooting
 
-### Issue: "Invalid API key"
+**"Command not found: pixelforge-mcp"**
 
-Double-check your Google API key is correct and has access to Gemini API.
-
-### Issue: "Server not starting"
-
-Check that pixelforge-mcp is installed globally:
+Ensure the pipx bin directory is in your PATH:
 
 ```bash
-which pixelforge-mcp
-pipx list | grep pixelforge
+export PATH="$HOME/.local/bin:$PATH"
+
+# Add to shell profile for persistence
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 ```
 
-If not installed, run:
+**"Invalid API key" or "Authentication failed"**
+
+- Verify your key at [Google AI Studio](https://aistudio.google.com/apikey)
+- Ensure Gemini API access is enabled on the key
+- Check the environment variable is set: `echo $GOOGLE_API_KEY`
+
+**MCP server not connecting**
+
+- Claude Code: Check `~/.claude.json` for correct configuration
+- Claude Desktop: Check `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Verify installation: `pipx list | grep pixelforge`
+
+**Updating to a new version**
 
 ```bash
-cd /path/to/pixelforge-mcp
-pipx install .
+pipx upgrade pixelforge-mcp
 ```
-
-## Testing the Server
-
-You can test the server directly without Claude from any directory:
-
-```bash
-# Test the global command
-pixelforge-mcp --help
-
-# Or run integration tests
-cd /path/to/pixelforge-mcp
-python -m pytest tests/integration/ -v
-```
-
-Since it's installed globally with pipx, you can run `pixelforge-mcp` from anywhere!
