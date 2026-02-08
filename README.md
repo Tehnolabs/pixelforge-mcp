@@ -27,20 +27,70 @@ pipx install pixelforge-mcp
 
 ### Configure
 
-**Claude Code:**
+#### Claude Code
 
 ```bash
 claude mcp add pixelforge --scope user -e GOOGLE_API_KEY="your-key" -- pixelforge-mcp
 ```
 
-**Claude Desktop** — edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
+#### Cursor
+
+Add to `.cursor/mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "pixelforge": {
       "command": "pixelforge-mcp",
-      "env": { "GOOGLE_API_KEY": "your-key" }
+      "env": {
+        "GOOGLE_API_KEY": "your-key"
+      }
+    }
+  }
+}
+```
+
+#### VS Code
+
+```bash
+code --add-mcp '{"name":"pixelforge","command":"pixelforge-mcp","env":{"GOOGLE_API_KEY":"your-key"}}'
+```
+
+#### Windsurf
+
+Add to `~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "pixelforge": {
+      "command": "pixelforge-mcp",
+      "env": {
+        "GOOGLE_API_KEY": "your-key"
+      }
+    }
+  }
+}
+```
+
+#### Kiro
+
+```bash
+kiro-cli mcp add --name pixelforge --scope global --command pixelforge-mcp --env "GOOGLE_API_KEY=your-key"
+```
+
+#### Claude Desktop
+
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "pixelforge": {
+      "command": "pixelforge-mcp",
+      "env": {
+        "GOOGLE_API_KEY": "your-key"
+      }
     }
   }
 }

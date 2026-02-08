@@ -24,6 +24,48 @@ claude mcp add pixelforge --scope user \
   -- pixelforge-mcp
 ```
 
+### Cursor
+
+Add to `.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "pixelforge": {
+      "command": "pixelforge-mcp",
+      "env": { "GOOGLE_API_KEY": "your-api-key-here" }
+    }
+  }
+}
+```
+
+### VS Code
+
+```bash
+code --add-mcp '{"name":"pixelforge","command":"pixelforge-mcp","env":{"GOOGLE_API_KEY":"your-api-key-here"}}'
+```
+
+### Windsurf
+
+Add to `~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "pixelforge": {
+      "command": "pixelforge-mcp",
+      "env": { "GOOGLE_API_KEY": "your-api-key-here" }
+    }
+  }
+}
+```
+
+### Kiro
+
+```bash
+kiro-cli mcp add --name pixelforge --scope global --command pixelforge-mcp --env "GOOGLE_API_KEY=your-api-key-here"
+```
+
 ### Claude Desktop
 
 Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
@@ -33,9 +75,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
   "mcpServers": {
     "pixelforge": {
       "command": "pixelforge-mcp",
-      "env": {
-        "GOOGLE_API_KEY": "your-api-key-here"
-      }
+      "env": { "GOOGLE_API_KEY": "your-api-key-here" }
     }
   }
 }
@@ -89,6 +129,9 @@ export PATH="$HOME/.local/bin:$PATH"
 
 **MCP server not starting** — Check your client configuration:
 - Claude Code: `~/.claude.json`
+- Cursor: `.cursor/mcp.json`
+- VS Code: User MCP settings
+- Windsurf: `~/.codeium/windsurf/mcp_config.json`
 - Claude Desktop: `~/Library/Application Support/Claude/claude_desktop_config.json`
 
 ## Resources
