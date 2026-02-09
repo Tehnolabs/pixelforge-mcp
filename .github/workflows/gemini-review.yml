@@ -1,0 +1,86 @@
+name: Gemini Review
+
+on:
+  workflow_call:
+    inputs:
+      additional_context:
+        type: string
+        description: Additional context from the review request
+        required: false
+
+concurrency:
+  group: gemini-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Gemini PR review
+        uses: google-github-actions/run-gemini-cli@v0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          REPOSITORY: ${{ github.repository }}
+          ADDITIONAL_CONTEXT: ${{ inputs.additional_context }}
+        with:
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          settings: |-
+            {
+              "model": {
+                "maxSessionTurns": 25
+              },
+              "mcpServers": {
+                "github": {
+                  "command": "docker",
+                  "args": [
+                    "run", "-i", "--rm",
+                    "-e", "GITHUB_PERSONAL_ACCESS_TOKEN",
+                    "ghcr.io/github/github-mcp-server:v0.27.0"
+                  ],
+                  "includeTools": [
+                    "add_comment_to_pending_review",
+                    "pull_request_read",
+                    "pull_request_review_write"
+                  ],
+                  "env": {
+                    "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+                  }
+                }
+              },
+              "tools": {
+                "core": [
+                  "run_shell_command(cat)",
+                  "run_shell_command(grep)",
+                  "run_shell_command(head)",
+                  "run_shell_command(tail)"
+                ]
+              }
+            }
+          prompt: |-
+            You are a code reviewer for pixelforge-mcp, a Python MCP server
+            for AI-powered image generation using Google Gemini models.
+
+            Review pull request #${PULL_REQUEST_NUMBER} in ${REPOSITORY}.
+
+            Use the GitHub MCP tools to:
+            1. Read the pull request diff
+            2. Analyze changes for:
+               - Correctness and potential bugs
+               - Security issues (API key handling, input validation)
+               - Python best practices and type safety
+               - Test coverage gaps
+            3. Post inline comments on lines with issues (include severity: Critical/High/Medium/Low)
+            4. Submit a review summary
+
+            Use COMMENT event type only. Never use APPROVE or REQUEST_CHANGES.
+
+            Additional context from the reviewer: ${ADDITIONAL_CONTEXT}

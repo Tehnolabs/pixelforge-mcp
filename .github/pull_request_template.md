@@ -1,20 +1,25 @@
-## Changes
+<!-- PR title format: "type: short description" (e.g. "feat: add batch image generation") -->
+<!-- This title appears in auto-generated release notes, so make it clear and user-facing. -->
 
-Brief summary of what this PR does.
+## What and why
+
+<!-- What does this PR do and why is it needed? 1-3 sentences. -->
 
 ## Type
 
-- [ ] Bug fix
-- [ ] New feature
-- [ ] Documentation
-- [ ] Refactor
+- [ ] `feat` — New feature
+- [ ] `fix` — Bug fix
+- [ ] `docs` — Documentation
+- [ ] `refactor` — Code restructuring
+- [ ] `chore` — Maintenance
 
 ## Testing
 
-Describe how you tested these changes.
+<!-- How did you verify this works? -->
 
 ## Checklist
 
+- [ ] PR title uses conventional commit format (`feat:`, `fix:`, etc.)
 - [ ] Code follows project style (`black`, `ruff`, `mypy`)
 - [ ] Tests added/updated and passing (`pytest tests/unit/ -v`)
 - [ ] Documentation updated (if applicable)
