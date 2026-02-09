@@ -210,6 +210,22 @@ Version lives in **two places** — both must be updated together:
 
 **When to bump:** Ask the user before bumping. After bumping, add a CHANGELOG entry under the new version.
 
+## Releasing
+
+Releases are done manually from the command line. The `python-publish.yml` workflow handles PyPI upload automatically when a GitHub Release is created.
+
+```bash
+# 1. Make sure you're on main with the version already bumped
+git checkout main && git pull
+
+# 2. Create a GitHub Release (this triggers PyPI publish)
+gh release create v0.X.Y --generate-notes
+```
+
+That's it. The `--generate-notes` flag auto-generates a changelog from merged PRs since the last release.
+
+**Do not** use automated release workflows with `GITHUB_TOKEN` — GitHub blocks workflow-created events from triggering other workflows, so the PyPI publish step would never fire.
+
 ## Code Style
 
 Configured in `pyproject.toml`:
