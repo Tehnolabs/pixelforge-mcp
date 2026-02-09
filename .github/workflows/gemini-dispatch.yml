@@ -8,10 +8,10 @@ on:
 
 jobs:
   dispatch:
-    # Only trigger for trusted users mentioning @gemini-cli
+    # Trigger on "/gemini-review" from trusted users
     if: |-
       github.event.sender.type == 'User' &&
-      startsWith(github.event.comment.body, '@gemini-cli') &&
+      startsWith(github.event.comment.body, '/gemini-review') &&
       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
     runs-on: ubuntu-latest
     permissions:
@@ -34,14 +34,9 @@ jobs:
           script: |
             const request = process.env.REQUEST;
 
-            if (request.startsWith('@gemini-cli /review')) {
+            if (request.startsWith('/gemini-review')) {
               core.setOutput('command', 'review');
-              const ctx = request.replace(/^@gemini-cli \/review/, '').trim();
-              core.setOutput('additional_context', ctx);
-            } else if (request.startsWith('@gemini-cli')) {
-              // Default to review for any @gemini-cli mention on a PR
-              core.setOutput('command', 'review');
-              const ctx = request.replace(/^@gemini-cli/, '').trim();
+              const ctx = request.replace(/^\/gemini-review/, '').trim();
               core.setOutput('additional_context', ctx);
             } else {
               core.setOutput('command', 'fallthrough');
