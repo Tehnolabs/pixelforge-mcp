@@ -63,5 +63,9 @@ Thumbs.db
 # Claude Code
 .claude/
 
+# Gemini CLI
+.gemini/
+gha-creds-*.json
+
 # MyPy
 .mypy_cache/
