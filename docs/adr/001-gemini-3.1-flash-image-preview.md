@@ -46,7 +46,7 @@ Each model has a clear, non-overlapping role in the guidance:
 
 This avoids ambiguous "use either" guidance — each model wins on specific axes.
 
-### 4. Version bump 0.1.5 -> 0.1.6
+### 4. Version bump 0.1.5 -> 0.2.0
 
 Patch version bump for additive feature (new model + new ratios, no breaking changes).
 
