@@ -20,7 +20,7 @@ class TestCLIResult:
             output="Image generated",
             error=None,
             return_code=0,
-            data={"path": "/test.png"}
+            data={"path": "/test.png"},
         )
         assert result.success is True
         assert result.output == "Image generated"
@@ -49,11 +49,7 @@ class TestImagenCLI:
     def test_init_verifies_cli(self, mock_run):
         """Test initialization verifies CLI is available."""
         # Mock successful version check
-        mock_run.return_value = Mock(
-            returncode=0,
-            stdout="imagen 0.6.6",
-            stderr=""
-        )
+        mock_run.return_value = Mock(returncode=0, stdout="imagen 0.6.6", stderr="")
 
         cli = ImagenCLI()
         assert cli.timeout == 120
@@ -84,19 +80,13 @@ class TestImagenCLI:
     def test_generate_success(self, mock_run, tmp_path):
         """Test successful image generation."""
         # Mock CLI verification
-        mock_run.return_value = Mock(
-            returncode=0,
-            stdout="imagen 0.6.6",
-            stderr=""
-        )
+        mock_run.return_value = Mock(returncode=0, stdout="imagen 0.6.6", stderr="")
         cli = ImagenCLI()
 
         # Mock generate command
         output_data = {"status": "success", "path": "/test.png"}
         mock_run.return_value = Mock(
-            returncode=0,
-            stdout=json.dumps(output_data),
-            stderr=""
+            returncode=0, stdout=json.dumps(output_data), stderr=""
         )
 
         output_path = tmp_path / "test.png"
@@ -104,7 +94,7 @@ class TestImagenCLI:
             prompt="test prompt",
             output_path=output_path,
             aspect_ratio="16:9",
-            temperature=0.8
+            temperature=0.8,
         )
 
         assert result.success is True
@@ -125,24 +115,13 @@ class TestImagenCLI:
     def test_generate_failure(self, mock_run):
         """Test failed image generation."""
         # Mock CLI verification
-        mock_run.return_value = Mock(
-            returncode=0,
-            stdout="imagen 0.6.6",
-            stderr=""
-        )
+        mock_run.return_value = Mock(returncode=0, stdout="imagen 0.6.6", stderr="")
         cli = ImagenCLI()
 
         # Mock failed generate command
-        mock_run.return_value = Mock(
-            returncode=1,
-            stdout="",
-            stderr="API key invalid"
-        )
+        mock_run.return_value = Mock(returncode=1, stdout="", stderr="API key invalid")
 
-        result = cli.generate(
-            prompt="test",
-            output_path=Path("/test.png")
-        )
+        result = cli.generate(prompt="test", output_path=Path("/test.png"))
 
         assert result.success is False
         assert result.return_code == 1
@@ -152,23 +131,13 @@ class TestImagenCLI:
     def test_generate_timeout(self, mock_run):
         """Test generation with timeout."""
         # Mock CLI verification
-        mock_run.return_value = Mock(
-            returncode=0,
-            stdout="imagen 0.6.6",
-            stderr=""
-        )
+        mock_run.return_value = Mock(returncode=0, stdout="imagen 0.6.6", stderr="")
         cli = ImagenCLI(timeout=5)
 
         # Mock timeout
-        mock_run.side_effect = subprocess.TimeoutExpired(
-            cmd="imagen",
-            timeout=5
-        )
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="imagen", timeout=5)
 
-        result = cli.generate(
-            prompt="test",
-            output_path=Path("/test.png")
-        )
+        result = cli.generate(prompt="test", output_path=Path("/test.png"))
 
         assert result.success is False
         assert result.return_code == -1
@@ -178,11 +147,7 @@ class TestImagenCLI:
     def test_edit_success(self, mock_run, tmp_path):
         """Test successful image editing."""
         # Mock CLI verification
-        mock_run.return_value = Mock(
-            returncode=0,
-            stdout="imagen 0.6.6",
-            stderr=""
-        )
+        mock_run.return_value = Mock(returncode=0, stdout="imagen 0.6.6", stderr="")
         cli = ImagenCLI()
 
         # Create test input file
@@ -193,16 +158,14 @@ class TestImagenCLI:
         # Mock edit command
         output_data = {"status": "success"}
         mock_run.return_value = Mock(
-            returncode=0,
-            stdout=json.dumps(output_data),
-            stderr=""
+            returncode=0, stdout=json.dumps(output_data), stderr=""
         )
 
         result = cli.edit(
             prompt="add clouds",
             input_path=input_path,
             output_path=output_path,
-            temperature=0.7
+            temperature=0.7,
         )
 
         assert result.success is True
@@ -217,11 +180,7 @@ class TestImagenCLI:
     def test_analyze_success(self, mock_run, tmp_path):
         """Test successful image analysis."""
         # Mock CLI verification
-        mock_run.return_value = Mock(
-            returncode=0,
-            stdout="imagen 0.6.6",
-            stderr=""
-        )
+        mock_run.return_value = Mock(returncode=0, stdout="imagen 0.6.6", stderr="")
         cli = ImagenCLI()
 
         # Create test image
@@ -231,9 +190,7 @@ class TestImagenCLI:
         # Mock analyze command
         analysis_data = {"description": "A beautiful sunset"}
         mock_run.return_value = Mock(
-            returncode=0,
-            stdout=json.dumps(analysis_data),
-            stderr=""
+            returncode=0, stdout=json.dumps(analysis_data), stderr=""
         )
 
         result = cli.analyze(image_path)
@@ -250,19 +207,13 @@ class TestImagenCLI:
     def test_list_models_success(self, mock_run):
         """Test successful model listing."""
         # Mock CLI verification
-        mock_run.return_value = Mock(
-            returncode=0,
-            stdout="imagen 0.6.6",
-            stderr=""
-        )
+        mock_run.return_value = Mock(returncode=0, stdout="imagen 0.6.6", stderr="")
         cli = ImagenCLI()
 
         # Mock list models command
         models_data = {"models": ["gemini-2.5-flash-image"]}
         mock_run.return_value = Mock(
-            returncode=0,
-            stdout=json.dumps(models_data),
-            stderr=""
+            returncode=0, stdout=json.dumps(models_data), stderr=""
         )
 
         result = cli.list_models()
@@ -279,24 +230,13 @@ class TestImagenCLI:
     def test_json_parsing_failure(self, mock_run):
         """Test handling of invalid JSON output."""
         # Mock CLI verification
-        mock_run.return_value = Mock(
-            returncode=0,
-            stdout="imagen 0.6.6",
-            stderr=""
-        )
+        mock_run.return_value = Mock(returncode=0, stdout="imagen 0.6.6", stderr="")
         cli = ImagenCLI()
 
         # Mock command with invalid JSON
-        mock_run.return_value = Mock(
-            returncode=0,
-            stdout="not valid json",
-            stderr=""
-        )
+        mock_run.return_value = Mock(returncode=0, stdout="not valid json", stderr="")
 
-        result = cli.generate(
-            prompt="test",
-            output_path=Path("/test.png")
-        )
+        result = cli.generate(prompt="test", output_path=Path("/test.png"))
 
         assert result.success is True
         assert result.data is None  # JSON parsing failed
@@ -306,21 +246,13 @@ class TestImagenCLI:
     def test_custom_timeout(self, mock_run):
         """Test CLI with custom timeout."""
         # Mock CLI verification
-        mock_run.return_value = Mock(
-            returncode=0,
-            stdout="imagen 0.6.6",
-            stderr=""
-        )
+        mock_run.return_value = Mock(returncode=0, stdout="imagen 0.6.6", stderr="")
 
         cli = ImagenCLI(timeout=300)
         assert cli.timeout == 300
 
         # Mock generate command
-        mock_run.return_value = Mock(
-            returncode=0,
-            stdout="{}",
-            stderr=""
-        )
+        mock_run.return_value = Mock(returncode=0, stdout="{}", stderr="")
 
         cli.generate(prompt="test", output_path=Path("/test.png"))
 

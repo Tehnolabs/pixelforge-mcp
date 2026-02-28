@@ -67,6 +67,12 @@ class TestGenerateImageInput:
         input_data = GenerateImageInput(prompt=max_prompt)
         assert len(input_data.prompt) == 2000
 
+    def test_panoramic_aspect_ratios_accepted(self):
+        """Test panoramic aspect ratios are accepted by GenerateImageInput."""
+        for ratio in ["1:4", "4:1", "1:8", "8:1"]:
+            input_data = GenerateImageInput(prompt="test", aspect_ratio=ratio)
+            assert input_data.aspect_ratio == ratio
+
     def test_invalid_aspect_ratio(self):
         """Test invalid aspect ratio is rejected."""
         with pytest.raises(ValidationError, match="Invalid aspect ratio"):
@@ -84,9 +90,9 @@ class TestGenerateImageInput:
             GenerateImageInput(prompt="test", temperature=-0.1)
 
     def test_temperature_too_high(self):
-        """Test temperature above 1 is rejected."""
+        """Test temperature above 2 is rejected."""
         with pytest.raises(ValidationError):
-            GenerateImageInput(prompt="test", temperature=1.1)
+            GenerateImageInput(prompt="test", temperature=2.1)
 
     def test_temperature_boundaries(self):
         """Test temperature at boundaries is accepted."""
@@ -94,9 +100,9 @@ class TestGenerateImageInput:
         input_data = GenerateImageInput(prompt="test", temperature=0.0)
         assert input_data.temperature == 0.0
 
-        # 1.0
-        input_data = GenerateImageInput(prompt="test", temperature=1.0)
-        assert input_data.temperature == 1.0
+        # 2.0
+        input_data = GenerateImageInput(prompt="test", temperature=2.0)
+        assert input_data.temperature == 2.0
 
     def test_filename_with_path_separator_rejected(self):
         """Test filename with path separators is rejected."""
@@ -119,9 +125,7 @@ class TestGenerateImageInput:
     def test_filename_with_valid_extensions(self):
         """Test filenames with valid extensions are accepted."""
         for ext in [".png", ".jpg", ".jpeg", ".webp"]:
-            input_data = GenerateImageInput(
-                prompt="test", output_filename=f"test{ext}"
-            )
+            input_data = GenerateImageInput(prompt="test", output_filename=f"test{ext}")
             assert input_data.output_filename == f"test{ext}"
 
     def test_filename_with_mixed_case_extension(self):
@@ -164,9 +168,7 @@ class TestEditImageInput:
     def test_nonexistent_image_rejected(self):
         """Test non-existent input image is rejected."""
         with pytest.raises(ValidationError, match="not found"):
-            EditImageInput(
-                prompt="test", input_image_path="/nonexistent/image.png"
-            )
+            EditImageInput(prompt="test", input_image_path="/nonexistent/image.png")
 
     def test_directory_path_rejected(self, tmp_path):
         """Test directory path is rejected as input image."""
@@ -200,7 +202,7 @@ class TestEditImageInput:
             EditImageInput(
                 prompt="test",
                 input_image_path=str(image_path),
-                temperature=1.1,
+                temperature=2.1,
             )
 
 
@@ -301,9 +303,7 @@ class TestAnalyzeImageInput:
         image_path = tmp_path / "test.png"
         image_path.touch()
 
-        input_data = AnalyzeImageInput(
-            image_path=str(image_path), prompt="a" * 2000
-        )
+        input_data = AnalyzeImageInput(image_path=str(image_path), prompt="a" * 2000)
         assert len(input_data.prompt) == 2000
 
 
@@ -319,4 +319,10 @@ class TestAspectRatios:
         """Test common aspect ratios are included."""
         common_ratios = ["1:1", "16:9", "9:16", "4:3", "3:4"]
         for ratio in common_ratios:
+            assert ratio in ASPECT_RATIOS, f"{ratio} should be in ASPECT_RATIOS"
+
+    def test_panoramic_ratios_included(self):
+        """Test panoramic aspect ratios are included."""
+        panoramic_ratios = ["1:4", "4:1", "1:8", "8:1"]
+        for ratio in panoramic_ratios:
             assert ratio in ASPECT_RATIOS, f"{ratio} should be in ASPECT_RATIOS"
