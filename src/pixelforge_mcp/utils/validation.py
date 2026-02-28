@@ -6,7 +6,6 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-
 # Supported aspect ratios
 ASPECT_RATIOS = [
     "1:1",
@@ -19,6 +18,10 @@ ASPECT_RATIOS = [
     "9:16",
     "16:9",
     "21:9",
+    "1:4",
+    "4:1",
+    "1:8",
+    "8:1",
 ]
 
 
@@ -34,9 +37,9 @@ class GenerateImageInput(BaseModel):
     )
     temperature: float = Field(
         0.7,
-        description="Creativity level (0.0-1.0). Higher = more creative",
+        description="Creativity level (0.0-2.0). Higher = more creative",
         ge=0.0,
-        le=1.0,
+        le=2.0,
     )
     model: Optional[str] = Field(
         None, description="Model to use (default: gemini-2.5-flash-image)"
@@ -100,7 +103,7 @@ class EditImageInput(BaseModel):
         None, description="Custom filename for the edited image"
     )
     temperature: float = Field(
-        0.7, description="Creativity level (0.0-1.0)", ge=0.0, le=1.0
+        0.7, description="Creativity level (0.0-2.0)", ge=0.0, le=2.0
     )
 
     @field_validator("prompt")

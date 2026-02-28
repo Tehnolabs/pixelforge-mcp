@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-02-28
+
+### Added
+
+- New model `gemini-3.1-flash-image-preview` (Nano Banana 2) — Pro-level quality at Flash speed
+- 4 panoramic aspect ratios: `1:4`, `4:1`, `1:8`, `8:1`
+- Per-model temperature metadata in `list_available_models()` for AI client discoverability
+
+### Changed
+
+- Temperature range expanded from 0.0-1.0 to 0.0-2.0 to match API capabilities
+
 ## [0.1.5] - 2026-02-09
 
 ### Added
@@ -56,13 +68,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Server configuration and status via `get_server_info` tool
 - Per-request model switching between gemini-2.5-flash-image and gemini-3-pro-image-preview
 - 10 aspect ratio options (1:1, 16:9, 9:16, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 21:9)
-- Temperature control for creativity adjustment (0.0-1.0)
+- Temperature control for creativity adjustment (0.0-2.0)
 - Pydantic-based configuration with YAML file support
 - Environment variable support (GOOGLE_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY, GEMINI_API_KEY)
 - 72 unit tests with full coverage
 - PyPI package distribution via pipx
 
-[Unreleased]: https://github.com/tehnolabs/pixelforge-mcp/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/tehnolabs/pixelforge-mcp/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/tehnolabs/pixelforge-mcp/compare/v0.1.5...v0.2.0
 [0.1.5]: https://github.com/tehnolabs/pixelforge-mcp/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/tehnolabs/pixelforge-mcp/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/tehnolabs/pixelforge-mcp/compare/v0.1.2...v0.1.3

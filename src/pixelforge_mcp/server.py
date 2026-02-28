@@ -67,7 +67,9 @@ def generate_output_path(
     return output_dir / f"{prefix}_{timestamp}.png"
 
 
-def format_api_result(result: GenerationResult, image_path: Optional[Path] = None) -> dict:
+def format_api_result(
+    result: GenerationResult, image_path: Optional[Path] = None
+) -> dict:
     """Format API result for MCP response.
 
     Args:
@@ -107,10 +109,12 @@ async def generate_image(
         prompt: Text description of the image to generate
         output_filename: Custom filename (optional, will auto-generate if not provided)
         aspect_ratio: Image dimensions (1:1, 16:9, 9:16, etc.)
-        temperature: Creativity level 0.0-1.0 (higher = more creative)
+        temperature: Creativity level 0.0-2.0 (higher = more creative).
+            Per-model temperature ranges are available via list_available_models().
         model: Specific model to use (optional). Available models:
-            - "gemini-2.5-flash-image" (default): Fast generation, good for iterations
-            - "gemini-3-pro-image-preview": Highest quality, best for final outputs
+            - "gemini-2.5-flash-image" (default): Fast, cheap iterations
+            - "gemini-3-pro-image-preview": Max text fidelity, complex edits
+            - "gemini-3.1-flash-image-preview": Panoramic, grounded, fast 4K
             Call list_available_models() for detailed model capabilities.
         safety_setting: Content safety filter (preset:strict, preset:relaxed)
 
@@ -119,10 +123,10 @@ async def generate_image(
 
     MODEL SWITCHING GUIDANCE:
         Choose model based on your needs:
-        - Speed/iteration: Use gemini-2.5-flash-image (default)
-        - Quality/complexity: Use gemini-3-pro-image-preview
-        - Text in images: Use gemini-3-pro-image-preview
-        - High resolution (2K/4K): Use gemini-3-pro-image-preview
+        - Speed/iteration: gemini-2.5-flash-image (default)
+        - Panoramic/grounded: gemini-3.1-flash-image-preview
+        - Max text fidelity: gemini-3-pro-image-preview
+        - Complex editing: gemini-3-pro-image-preview
 
         You can switch models on every request - no setup needed!
 
@@ -139,6 +143,13 @@ async def generate_image(
             model="gemini-3-pro-image-preview",
             aspect_ratio="16:9",
             temperature=0.8
+        )
+
+        # Panoramic with quality+speed
+        generate_image(
+            prompt="Mountain landscape panorama at golden hour",
+            model="gemini-3.1-flash-image-preview",
+            aspect_ratio="8:1"
         )
     """
     logger.info(f"Generating image: {prompt[:50]}...")
@@ -207,7 +218,8 @@ async def edit_image(
         prompt: Description of the desired changes
         input_image_path: Path to the image to edit
         output_filename: Custom filename for edited image (optional)
-        temperature: Creativity level 0.0-1.0
+        temperature: Creativity level 0.0-2.0.
+            Per-model temperature ranges are available via list_available_models().
 
     Returns:
         Dictionary with editing result and new image path
@@ -311,9 +323,7 @@ async def analyze_image(image_path: str, prompt: Optional[str] = None) -> dict:
 
         # Execute analysis
         client = get_api_client()
-        result = await client.analyze(
-            Path(inputs.image_path), prompt=inputs.prompt
-        )
+        result = await client.analyze(Path(inputs.image_path), prompt=inputs.prompt)
 
         # Format response
         if result.success and result.data:
@@ -374,7 +384,7 @@ async def list_available_models() -> dict:
                 "success": True,
                 "models": result.data.get("models", []),
                 "recommendation": result.data.get("recommendation", ""),
-                "note": "Each model can be selected per-request using the 'model' parameter in generate_image()"
+                "note": "Each model can be selected per-request using the 'model' parameter in generate_image()",
             }
         else:
             # Fallback - basic model list
@@ -384,13 +394,18 @@ async def list_available_models() -> dict:
                     {
                         "name": "gemini-2.5-flash-image",
                         "description": "Fast model for iterations",
-                        "default": True
+                        "default": True,
+                    },
+                    {
+                        "name": "gemini-3.1-flash-image-preview",
+                        "description": "Panoramic, grounded, fast 4K",
+                        "default": False,
                     },
                     {
                         "name": "gemini-3-pro-image-preview",
-                        "description": "High quality model for final outputs",
-                        "default": False
-                    }
+                        "description": "Max text fidelity, complex edits",
+                        "default": False,
+                    },
                 ],
                 "note": "Default models - model switching available on every request",
             }
@@ -430,14 +445,14 @@ def get_server_info() -> dict:
         "model_switching": {
             "enabled": True,
             "method": "per_request_parameter",
-            "available_models": 2,
+            "available_models": 3,
             "guidance": "Models can be switched on every generate_image() call. Use 'model' parameter to override default. Call list_available_models() for detailed capabilities.",
             "quick_tips": {
-                "fast": "gemini-2.5-flash-image",
-                "quality": "gemini-3-pro-image-preview",
-                "text_in_images": "gemini-3-pro-image-preview",
-                "high_res": "gemini-3-pro-image-preview"
-            }
+                "fast_iterations": "gemini-2.5-flash-image",
+                "panoramic_grounded": "gemini-3.1-flash-image-preview",
+                "max_text_fidelity": "gemini-3-pro-image-preview",
+                "complex_editing": "gemini-3-pro-image-preview",
+            },
         },
     }
 

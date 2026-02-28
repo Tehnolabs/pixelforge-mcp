@@ -42,15 +42,16 @@ jobs:
               core.setOutput('command', 'fallthrough');
             }
 
-      - name: Acknowledge request
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          ISSUE_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          gh issue comment "${ISSUE_NUMBER}" \
-            --body "On it! Starting review now..." \
-            --repo "${REPOSITORY}"
+      - name: React with eyes to acknowledge
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'eyes',
+            });
 
   review:
     needs: dispatch
@@ -64,6 +65,27 @@ jobs:
       additional_context: ${{ needs.dispatch.outputs.additional_context }}
     secrets: inherit
 
+  complete:
+    needs:
+      - dispatch
+      - review
+    if: success()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - name: React with check mark on completion
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: '+1',
+            });
+
   fallthrough:
     needs:
       - dispatch
@@ -75,6 +97,16 @@ jobs:
       issues: write
       pull-requests: write
     steps:
+      - name: React with confused on failure
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'confused',
+            });
       - name: Send failure comment
         env:
           GITHUB_TOKEN: ${{ github.token }}

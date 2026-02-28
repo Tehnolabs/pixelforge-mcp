@@ -13,8 +13,7 @@ class ImagenConfig(BaseModel):
 
     api_key: Optional[str] = Field(None, description="Google API key")
     default_model: str = Field(
-        "gemini-2.5-flash-image",
-        description="Default image generation model"
+        "gemini-2.5-flash-image", description="Default image generation model"
     )
     default_aspect_ratio: str = Field("1:1", description="Default aspect ratio")
     default_temperature: float = Field(0.7, description="Default temperature")
@@ -23,9 +22,9 @@ class ImagenConfig(BaseModel):
     @field_validator("default_temperature")
     @classmethod
     def validate_temperature(cls, v: float) -> float:
-        """Ensure temperature is between 0 and 1."""
-        if not 0 <= v <= 1:
-            raise ValueError("Temperature must be between 0 and 1")
+        """Ensure temperature is between 0 and 2."""
+        if not 0 <= v <= 2:
+            raise ValueError("Temperature must be between 0 and 2")
         return v
 
 
@@ -33,8 +32,7 @@ class StorageConfig(BaseModel):
     """Storage configuration."""
 
     output_dir: Path = Field(
-        Path("./generated_images"),
-        description="Directory for generated images"
+        Path("./generated_images"), description="Directory for generated images"
     )
     use_s3: bool = Field(False, description="Enable S3 storage")
     s3_bucket: Optional[str] = Field(None, description="S3 bucket name")
@@ -52,7 +50,7 @@ class ServerConfig(BaseModel):
     """MCP server configuration."""
 
     name: str = Field("gemini-imagen-mcp", description="Server name")
-    version: str = Field("0.1.5", description="Server version")
+    version: str = Field("0.2.0", description="Server version")
     log_level: str = Field("INFO", description="Logging level")
 
 

@@ -37,16 +37,19 @@ class TestImagenConfig:
         config = ImagenConfig(default_temperature=1.0)
         assert config.default_temperature == 1.0
 
+        config = ImagenConfig(default_temperature=2.0)
+        assert config.default_temperature == 2.0
+
         config = ImagenConfig(default_temperature=0.5)
         assert config.default_temperature == 0.5
 
     def test_temperature_validation_invalid(self):
         """Test temperature validation rejects invalid values."""
-        with pytest.raises(ValueError, match="Temperature must be between 0 and 1"):
+        with pytest.raises(ValueError, match="Temperature must be between 0 and 2"):
             ImagenConfig(default_temperature=-0.1)
 
-        with pytest.raises(ValueError, match="Temperature must be between 0 and 1"):
-            ImagenConfig(default_temperature=1.1)
+        with pytest.raises(ValueError, match="Temperature must be between 0 and 2"):
+            ImagenConfig(default_temperature=2.1)
 
 
 class TestStorageConfig:
@@ -77,7 +80,7 @@ class TestServerConfig:
         """Test ServerConfig uses correct defaults."""
         config = ServerConfig()
         assert config.name == "gemini-imagen-mcp"
-        assert config.version == "0.1.5"
+        assert config.version == "0.2.0"
         assert config.log_level == "INFO"
 
 

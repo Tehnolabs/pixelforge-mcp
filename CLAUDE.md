@@ -97,7 +97,7 @@ Any of these environment variables will work:
 
 | Tool | Description |
 |------|-------------|
-| `generate_image` | Generate images from text (model switching, 10 aspect ratios, temperature control) |
+| `generate_image` | Generate images from text (model switching, 14 aspect ratios, temperature control) |
 | `edit_image` | Modify existing images with text prompts |
 | `analyze_image` | Get AI-powered image descriptions (supports custom analysis prompts) |
 | `list_available_models` | Model capabilities and selection guidance |
@@ -105,10 +105,9 @@ Any of these environment variables will work:
 
 ## Model Selection
 
-- **Speed/iterations:** `gemini-2.5-flash-image` (default)
-- **Quality/complexity:** `gemini-3-pro-image-preview`
-- **Text in images:** `gemini-3-pro-image-preview`
-- **High resolution:** `gemini-3-pro-image-preview`
+- **Fast iterations:** `gemini-2.5-flash-image` (default) — cheapest, lowest latency
+- **Panoramic/grounded:** `gemini-3.1-flash-image-preview` — panoramic ratios, web+image grounding, fast 4K
+- **Max text fidelity:** `gemini-3-pro-image-preview` — ~94% text accuracy, complex multi-turn edits
 
 Call `list_available_models()` for detailed guidance.
 

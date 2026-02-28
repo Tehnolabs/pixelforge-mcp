@@ -23,7 +23,7 @@ class TestGenerationResult:
             error=None,
             images=[Mock(spec=Image.Image)],
             image_paths=["/test.png"],
-            data={"model": "gemini-2.5-flash-image"}
+            data={"model": "gemini-2.5-flash-image"},
         )
         assert result.success is True
         assert result.output == "Image generated successfully"
@@ -33,11 +33,7 @@ class TestGenerationResult:
 
     def test_create_failed_result(self):
         """Test creating a failed GenerationResult."""
-        result = GenerationResult(
-            success=False,
-            output="",
-            error="API key invalid"
-        )
+        result = GenerationResult(success=False, output="", error="API key invalid")
         assert result.success is False
         assert result.error == "API key invalid"
         assert result.images is None
@@ -57,9 +53,7 @@ class TestImagenAPIClient:
     def test_init_with_custom_params(self):
         """Test initialization with custom parameters."""
         client = ImagenAPIClient(
-            model_name="gemini-3-pro-image-preview",
-            api_key="test-key",
-            log_images=True
+            model_name="gemini-3-pro-image-preview", api_key="test-key", log_images=True
         )
         assert client.model_name == "gemini-3-pro-image-preview"
         assert client.api_key == "test-key"
@@ -84,7 +78,7 @@ class TestImagenAPIClient:
             output_path=output_path,
             aspect_ratio="16:9",
             temperature=0.8,
-            model="gemini-2.5-flash-image"
+            model="gemini-2.5-flash-image",
         )
 
         assert result.success is True
@@ -115,10 +109,7 @@ class TestImagenAPIClient:
         client = ImagenAPIClient()
         output_path = tmp_path / "test.png"
 
-        result = await client.generate(
-            prompt="test",
-            output_path=output_path
-        )
+        result = await client.generate(prompt="test", output_path=output_path)
 
         assert result.success is False
         assert result.error == "No images generated"
@@ -134,10 +125,7 @@ class TestImagenAPIClient:
         client = ImagenAPIClient()
         output_path = tmp_path / "test.png"
 
-        result = await client.generate(
-            prompt="test",
-            output_path=output_path
-        )
+        result = await client.generate(prompt="test", output_path=output_path)
 
         assert result.success is False
         assert "API error" in result.error
@@ -161,7 +149,7 @@ class TestImagenAPIClient:
             prompt="add clouds",
             input_path=input_path,
             output_path=output_path,
-            temperature=0.7
+            temperature=0.7,
         )
 
         assert result.success is True
@@ -191,9 +179,7 @@ class TestImagenAPIClient:
         output_path = tmp_path / "output.png"
 
         result = await client.edit(
-            prompt="add clouds",
-            input_path=input_path,
-            output_path=output_path
+            prompt="add clouds", input_path=input_path, output_path=output_path
         )
 
         assert result.success is False
@@ -285,12 +271,13 @@ class TestImagenAPIClient:
         # Check models is a list of dicts with metadata
         models = result.data["models"]
         assert isinstance(models, list)
-        assert len(models) == 2
+        assert len(models) == 3
 
         # Verify model structure
         model_names = [m["name"] for m in models]
         assert "gemini-2.5-flash-image" in model_names
         assert "gemini-3-pro-image-preview" in model_names
+        assert "gemini-3.1-flash-image-preview" in model_names
 
         # Verify metadata fields exist
         for model in models:
@@ -301,6 +288,25 @@ class TestImagenAPIClient:
             assert "description" in model
             assert "best_for" in model
             assert "capabilities" in model
+            assert "temperature" in model
+
+    @pytest.mark.asyncio
+    async def test_list_models_nano_banana_2_metadata(self):
+        """Test Nano Banana 2 model metadata is correct."""
+        client = ImagenAPIClient()
+        result = await client.list_models()
+
+        models = result.data["models"]
+        nb2 = next(m for m in models if m["name"] == "gemini-3.1-flash-image-preview")
+
+        assert nb2["nickname"] == "Nano Banana 2"
+        assert nb2["speed"] == "fast"
+        assert nb2["quality"] == "excellent"
+        assert nb2["default"] is False
+        assert nb2["capabilities"]["panoramic_ratios"] is True
+        assert nb2["capabilities"]["text_rendering"] == "excellent"
+        assert nb2["capabilities"]["grounding"] == "web search + Google Image Search"
+        assert nb2["temperature"] == {"min": 0.0, "max": 2.0, "default": 1.0}
 
     @pytest.mark.asyncio
     @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
@@ -336,9 +342,7 @@ class TestImagenAPIClient:
         output_path = tmp_path / "test.png"
 
         await client.generate(
-            prompt="test",
-            output_path=output_path,
-            model="gemini-3-pro-image-preview"
+            prompt="test", output_path=output_path, model="gemini-3-pro-image-preview"
         )
 
         # Verify model was changed

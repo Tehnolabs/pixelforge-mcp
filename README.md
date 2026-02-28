@@ -15,7 +15,7 @@ An MCP server for AI-powered image generation, editing, and analysis using Googl
 - Generate images from text prompts with per-request model switching
 - Edit existing images using natural language instructions
 - Analyze images with AI-powered descriptions
-- 10 aspect ratios and temperature control for creative flexibility
+- 14 aspect ratios (including panoramic) and temperature control for creative flexibility
 - Async-first architecture with full Pydantic validation
 - Self-documenting tools with built-in model selection guidance
 
@@ -116,7 +116,7 @@ Generate an image from a text prompt.
 - `prompt` (required): Text description of the image
 - `output_filename` (optional): Custom filename
 - `aspect_ratio` (optional): Image dimensions (default: "1:1")
-- `temperature` (optional): Creativity level 0.0-1.0 (default: 0.7)
+- `temperature` (optional): Creativity level 0.0-2.0 (default: 0.7)
 - `model` (optional): Model to use (default: "gemini-2.5-flash-image")
 - `safety_setting` (optional): Content safety filter — "preset:strict" (default) or "preset:relaxed"
 
@@ -135,7 +135,7 @@ Edit an existing image with a text prompt.
 - `prompt` (required): Description of desired changes
 - `input_image_path` (required): Path to the image to edit
 - `output_filename` (optional): Custom filename for edited image
-- `temperature` (optional): Creativity level 0.0-1.0 (default: 0.7)
+- `temperature` (optional): Creativity level 0.0-2.0 (default: 0.7)
 
 **Example prompts:**
 > Edit this image and add a rainbow in the sky
@@ -187,10 +187,11 @@ PixelForge supports **per-request model switching** — choose the right model f
 
 | Use case | Model | Why |
 |----------|-------|-----|
-| Fast iterations | `gemini-2.5-flash-image` (default) | Speed, lower cost |
-| High quality output | `gemini-3-pro-image-preview` | Photorealism, complex scenes |
-| Text in images | `gemini-3-pro-image-preview` | Legible text rendering |
-| High resolution (2K/4K) | `gemini-3-pro-image-preview` | Native high-res support |
+| Fast iterations | `gemini-2.5-flash-image` (default) | Cheapest, lowest latency |
+| Panoramic & grounded | `gemini-3.1-flash-image-preview` | 1:4/4:1/1:8/8:1, web+image grounding |
+| Fast high-res (4K) | `gemini-3.1-flash-image-preview` | 4-6s vs Pro's 8-12s, 512px-4K |
+| Max text fidelity | `gemini-3-pro-image-preview` | ~94% accuracy (vs Flash ~90%) |
+| Complex multi-turn edits | `gemini-3-pro-image-preview` | Deep reasoning, advanced editing |
 
 **Example prompts:**
 > Generate a quick concept sketch of a logo
@@ -202,9 +203,9 @@ Uses default fast model (`gemini-2.5-flash-image`).
 Switches to quality model (`gemini-3-pro-image-preview`).
 
 **Best Practices:**
-1. Use `gemini-2.5-flash-image` (default) for rapid prototyping
-2. Switch to `gemini-3-pro-image-preview` for production quality
-3. Always use `gemini-3-pro-image-preview` for readable text in images
+1. Start with `gemini-2.5-flash-image` (default) for rapid prototyping
+2. Use `gemini-3.1-flash-image-preview` for panoramic ratios and grounded generation
+3. Use `gemini-3-pro-image-preview` when text must be pixel-perfect or edits are multi-turn
 4. Ask Claude to *"list available models"* for detailed model metadata
 
 ## Supported Aspect Ratios
@@ -221,6 +222,12 @@ Switches to quality model (`gemini-3-pro-image-preview`).
 | `4:5` | Instagram portrait |
 | `5:4` | Medium format |
 | `21:9` | Ultrawide |
+| `1:4` | Tall panoramic* |
+| `4:1` | Wide panoramic* |
+| `1:8` | Extra tall panoramic* |
+| `8:1` | Extra wide panoramic* |
+
+\* Panoramic ratios require `gemini-3.1-flash-image-preview` model
 
 ## Troubleshooting
 

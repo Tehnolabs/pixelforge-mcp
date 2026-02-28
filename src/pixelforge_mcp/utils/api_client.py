@@ -246,32 +246,71 @@ class ImagenAPIClient:
                     "text_rendering": "basic",
                     "complex_scenes": "moderate",
                     "editing": "basic",
-                    "resolution": "1K"
-                }
+                    "resolution": "1K",
+                },
+                "temperature": {
+                    "min": 0.0,
+                    "max": 2.0,
+                    "default": 1.0,
+                },
             },
             {
                 "name": "gemini-3-pro-image-preview",
-                "nickname": "Gemini 3 Pro Image",
+                "nickname": "Nano Banana Pro",
                 "speed": "moderate",
                 "quality": "excellent",
                 "default": False,
-                "description": "Latest reasoning-enhanced model with advanced composition capabilities.",
+                "description": "Max text fidelity (~94%), "
+                "deep reasoning for complex prompts.",
                 "best_for": [
-                    "Photorealistic final outputs",
-                    "Complex multi-object scenes",
-                    "Legible text rendering in images",
-                    "Character consistency across images",
-                    "Multi-turn image editing workflows",
-                    "High-resolution outputs (2K/4K)"
+                    "Highest text rendering accuracy (~94%)",
+                    "Complex multi-turn editing workflows",
+                    "Deep reasoning on intricate prompts",
+                    "Character consistency (up to 5 chars)",
+                ],
+                "capabilities": {
+                    "text_rendering": "excellent (~94%)",
+                    "complex_scenes": "excellent",
+                    "editing": "advanced multi-turn",
+                    "resolution": "1K/2K/4K",
+                    "reference_inputs": "6 objects + 5 characters",
+                    "thinking_process": True,
+                    "grounding": "web search",
+                },
+                "temperature": {
+                    "min": 0.0,
+                    "max": 2.0,
+                    "default": 1.0,
+                },
+            },
+            {
+                "name": "gemini-3.1-flash-image-preview",
+                "nickname": "Nano Banana 2",
+                "speed": "fast",
+                "quality": "excellent",
+                "default": False,
+                "description": "Excellent quality at Flash speed. "
+                "Panoramic ratios, web+image grounding, 512px tier.",
+                "best_for": [
+                    "Panoramic aspect ratios (1:4, 4:1, 1:8, 8:1)",
+                    "Grounded generation (web + Google Image Search)",
+                    "Fast 4K output (4-6s vs Pro's 8-12s)",
+                    "512px rapid iteration tier",
+                    "Cost-sensitive high-volume generation",
                 ],
                 "capabilities": {
                     "text_rendering": "excellent",
-                    "complex_scenes": "excellent",
-                    "editing": "advanced",
-                    "resolution": "1K/2K/4K",
-                    "reference_inputs": "up to 14 images",
-                    "thinking_process": True
-                }
+                    "resolution": "512px/1K/2K/4K",
+                    "panoramic_ratios": True,
+                    "reference_inputs": "up to 14 objects + 5 characters",
+                    "thinking_process": True,
+                    "grounding": "web search + Google Image Search",
+                },
+                "temperature": {
+                    "min": 0.0,
+                    "max": 2.0,
+                    "default": 1.0,
+                },
             },
         ]
 
@@ -280,6 +319,11 @@ class ImagenAPIClient:
             output=f"Found {len(models)} available models",
             data={
                 "models": models,
-                "recommendation": "Use gemini-2.5-flash-image for speed, gemini-3-pro-image-preview for quality"
+                "recommendation": (
+                    "Use gemini-2.5-flash-image for speed, "
+                    "gemini-3-pro-image-preview for quality, "
+                    "gemini-3.1-flash-image-preview for "
+                    "quality+speed and panoramic ratios"
+                ),
             },
         )
