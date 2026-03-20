@@ -119,8 +119,9 @@ async def generate_image(
             4K requires gemini-3.1-flash or gemini-3-pro models.
         number_of_images: Generate 1-4 variations (default: 1)
         output_format: File format: "png" (default), "jpeg", or "webp"
-        person_generation: Person generation control:
-            "allow_all", "allow_adult", or "dont_allow"
+        person_generation: Controls whether people appear in images.
+            "allow" = anyone, "adults_only" = no minors (child safety),
+            "block" = no people at all
 
     Returns:
         Dictionary with generation result, image path(s), and details
@@ -528,7 +529,7 @@ def get_server_info() -> dict:
             "resolution_control": "1K/2K/4K via image_size parameter",
             "multi_image": "1-4 variations via number_of_images parameter",
             "output_formats": "png, jpeg, webp via output_format parameter",
-            "person_generation": "allow_all, allow_adult, dont_allow",
+            "person_generation": "allow, adults_only, block",
         },
     }
 

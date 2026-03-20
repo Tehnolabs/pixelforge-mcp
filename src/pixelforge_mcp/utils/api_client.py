@@ -252,8 +252,9 @@ class ImagenAPIClient:
     ) -> GenerationResult:
         """Generate an image from a text prompt.
 
-        Routes to direct SDK when extended params (image_size, person_generation)
-        are specified. Falls back to gemini-imagen wrapper for basic calls.
+        Routes to direct SDK when extended params (image_size,
+        person_generation) are specified. Falls back to gemini-imagen
+        wrapper for basic calls.
         """
         if self._needs_direct_sdk(image_size, person_generation):
             return await self._generate_via_sdk(

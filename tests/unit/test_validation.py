@@ -253,11 +253,11 @@ class TestGeneratePersonGeneration:
 
     def test_case_insensitive(self):
         """Test person_generation is case insensitive."""
-        input_data = GenerateImageInput(prompt="test", person_generation="ALLOW_ALL")
-        assert input_data.person_generation == "allow_all"
+        input_data = GenerateImageInput(prompt="test", person_generation="ALLOW")
+        assert input_data.person_generation == "allow"
 
-        input_data = GenerateImageInput(prompt="test", person_generation="Allow_Adult")
-        assert input_data.person_generation == "allow_adult"
+        input_data = GenerateImageInput(prompt="test", person_generation="Adults_Only")
+        assert input_data.person_generation == "adults_only"
 
     def test_invalid_option_rejected(self):
         """Test invalid person_generation is rejected."""
@@ -280,12 +280,12 @@ class TestGenerateAllNewParams:
             image_size="4K",
             number_of_images=3,
             output_format="webp",
-            person_generation="allow_all",
+            person_generation="allow",
         )
         assert input_data.image_size == "4K"
         assert input_data.number_of_images == 3
         assert input_data.output_format == "webp"
-        assert input_data.person_generation == "allow_all"
+        assert input_data.person_generation == "allow"
 
 
 class TestEditImageInput:

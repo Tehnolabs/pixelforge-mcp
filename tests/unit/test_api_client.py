@@ -366,13 +366,13 @@ class TestSDKRouting:
 
     def test_needs_direct_sdk_with_person_generation(self):
         """Test routing to SDK when person_generation is set."""
-        assert ImagenAPIClient._needs_direct_sdk(person_generation="allow_all") is True
+        assert ImagenAPIClient._needs_direct_sdk(person_generation="allow") is True
 
     def test_needs_direct_sdk_with_both(self):
         """Test routing to SDK when both extended params are set."""
         assert (
             ImagenAPIClient._needs_direct_sdk(
-                image_size="2K", person_generation="dont_allow"
+                image_size="2K", person_generation="block"
             )
             is True
         )

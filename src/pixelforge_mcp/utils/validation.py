@@ -37,14 +37,15 @@ FORMAT_EXTENSIONS = {
     "webp": ".webp",
 }
 
-# Person generation options (maps to google-genai ImageConfig.person_generation)
-PERSON_GENERATION_OPTIONS = ["allow_all", "allow_adult", "dont_allow"]
+# Person generation controls whether the AI generates people at all.
+# "adults_only" is a child safety feature — it blocks generating minors.
+PERSON_GENERATION_OPTIONS = ["allow", "adults_only", "block"]
 
-# Maps user-friendly values to SDK values
+# Maps user-friendly values to google-genai SDK values
 PERSON_GENERATION_SDK_MAP = {
-    "allow_all": "ALLOW_ALL",
-    "allow_adult": "ALLOW_ADULT",
-    "dont_allow": "ALLOW_NONE",
+    "allow": "ALLOW_ALL",
+    "adults_only": "ALLOW_ADULT",
+    "block": "ALLOW_NONE",
 }
 
 
@@ -88,7 +89,9 @@ class GenerateImageInput(BaseModel):
     )
     person_generation: Optional[str] = Field(
         None,
-        description="Person generation control: allow_all, allow_adult, or dont_allow",
+        description="Controls whether people appear in generated images. "
+        '"allow" = anyone, "adults_only" = no minors (child safety), '
+        '"block" = no people at all',
     )
 
     @field_validator("prompt")
