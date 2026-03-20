@@ -141,7 +141,9 @@ class ImagenAPIClient:
         save_kwargs: Dict[str, Any] = {"format": pillow_format}
         if pillow_format == "JPEG":
             if image.mode in ("RGBA", "LA", "PA"):
-                image = image.convert("RGB")
+                bg = Image.new("RGB", image.size, (255, 255, 255))
+                bg.paste(image, mask=image.split()[-1])
+                image = bg
             save_kwargs["quality"] = 95
 
         image.save(str(output_path), **save_kwargs)

@@ -197,7 +197,14 @@ async def generate_image(
         errors = []
         for i in range(inputs.number_of_images):
             suffix = f"_{i + 1}"
+            # Derive numbered filename from user-provided name or auto-generate
+            if inputs.output_filename:
+                base, ext = inputs.output_filename.rsplit(".", 1)
+                numbered_name = f"{base}{suffix}.{ext}"
+            else:
+                numbered_name = None
             output_path = generate_output_path(
+                filename=numbered_name,
                 prefix=f"generated{suffix}",
                 output_format=inputs.output_format,
             )

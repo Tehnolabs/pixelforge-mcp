@@ -451,9 +451,9 @@ class TestSaveImage:
         saved = Image.open(str(output_path))
         assert saved.format == "WEBP"
 
-    def test_save_jpeg_converts_rgba(self, tmp_path):
-        """Test JPEG saving converts RGBA to RGB."""
-        img = Image.new("RGBA", (100, 100), color=(255, 0, 0, 128))
+    def test_save_jpeg_converts_rgba_with_white_bg(self, tmp_path):
+        """Test JPEG saving composites RGBA onto white background."""
+        img = Image.new("RGBA", (100, 100), color=(255, 0, 0, 0))
         output_path = tmp_path / "test.jpg"
 
         ImagenAPIClient._save_image(img, output_path, "jpeg")
@@ -461,6 +461,9 @@ class TestSaveImage:
         assert output_path.exists()
         saved = Image.open(str(output_path))
         assert saved.mode == "RGB"
+        # Fully transparent red should become white (not black)
+        pixel = saved.getpixel((50, 50))
+        assert pixel == (255, 255, 255)
 
     def test_save_creates_parent_dirs(self, tmp_path):
         """Test saving creates parent directories."""
