@@ -27,7 +27,7 @@ jobs:
       # and processed in JS (not shell), preventing command injection.
       - name: Extract command
         id: extract_command
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           REQUEST: ${{ github.event.comment.body }}
         with:
@@ -43,7 +43,7 @@ jobs:
             }
 
       - name: React with eyes to acknowledge
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             await github.rest.reactions.createForIssueComment({
@@ -76,7 +76,7 @@ jobs:
       pull-requests: write
     steps:
       - name: React with check mark on completion
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             await github.rest.reactions.createForIssueComment({
@@ -98,7 +98,7 @@ jobs:
       pull-requests: write
     steps:
       - name: React with confused on failure
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             await github.rest.reactions.createForIssueComment({
