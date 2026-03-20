@@ -24,6 +24,29 @@ ASPECT_RATIOS = [
     "8:1",
 ]
 
+# Supported image sizes (maps to google-genai ImageConfig.image_size)
+IMAGE_SIZES = ["1K", "2K", "4K"]
+
+# Supported output formats
+OUTPUT_FORMATS = ["png", "jpeg", "webp"]
+
+# Format to file extension mapping
+FORMAT_EXTENSIONS = {
+    "png": ".png",
+    "jpeg": ".jpg",
+    "webp": ".webp",
+}
+
+# Person generation options (maps to google-genai ImageConfig.person_generation)
+PERSON_GENERATION_OPTIONS = ["allow_all", "allow_adult", "dont_allow"]
+
+# Maps user-friendly values to SDK values
+PERSON_GENERATION_SDK_MAP = {
+    "allow_all": "ALLOW_ALL",
+    "allow_adult": "ALLOW_ADULT",
+    "dont_allow": "ALLOW_NONE",
+}
+
 
 class GenerateImageInput(BaseModel):
     """Input validation for image generation."""
@@ -47,6 +70,25 @@ class GenerateImageInput(BaseModel):
     safety_setting: str = Field(
         "preset:strict",
         description="Safety filter: preset:strict, preset:relaxed, or custom",
+    )
+    image_size: Optional[str] = Field(
+        None,
+        description="Output resolution: 1K (default), 2K, or 4K. "
+        "4K requires gemini-3.1-flash or gemini-3-pro models.",
+    )
+    number_of_images: int = Field(
+        1,
+        description="Number of image variations to generate (1-4)",
+        ge=1,
+        le=4,
+    )
+    output_format: str = Field(
+        "png",
+        description="Output format: png (default), jpeg, or webp",
+    )
+    person_generation: Optional[str] = Field(
+        None,
+        description="Person generation control: allow_all, allow_adult, or dont_allow",
     )
 
     @field_validator("prompt")
@@ -84,13 +126,52 @@ class GenerateImageInput(BaseModel):
         # Check for valid characters
         if not re.match(r"^[a-zA-Z0-9_\-\.]+$", v):
             raise ValueError(
-                "Filename can only contain letters, numbers, underscore, hyphen, and dot"
+                "Filename can only contain letters, numbers, "
+                "underscore, hyphen, and dot"
             )
 
         # Ensure it has an image extension
         if not v.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
             v = v + ".png"
 
+        return v
+
+    @field_validator("image_size")
+    @classmethod
+    def validate_image_size(cls, v: Optional[str]) -> Optional[str]:
+        """Validate image size is supported."""
+        if v is None:
+            return v
+        v = v.upper()
+        if v not in IMAGE_SIZES:
+            raise ValueError(
+                f"Invalid image size. Must be one of: {', '.join(IMAGE_SIZES)}"
+            )
+        return v
+
+    @field_validator("output_format")
+    @classmethod
+    def validate_output_format(cls, v: str) -> str:
+        """Validate output format is supported."""
+        v = v.lower()
+        if v not in OUTPUT_FORMATS:
+            raise ValueError(
+                f"Invalid output format. Must be one of: {', '.join(OUTPUT_FORMATS)}"
+            )
+        return v
+
+    @field_validator("person_generation")
+    @classmethod
+    def validate_person_generation(cls, v: Optional[str]) -> Optional[str]:
+        """Validate person generation setting."""
+        if v is None:
+            return v
+        v = v.lower()
+        if v not in PERSON_GENERATION_OPTIONS:
+            raise ValueError(
+                f"Invalid person generation setting. "
+                f"Must be one of: {', '.join(PERSON_GENERATION_OPTIONS)}"
+            )
         return v
 
 
@@ -104,6 +185,15 @@ class EditImageInput(BaseModel):
     )
     temperature: float = Field(
         0.7, description="Creativity level (0.0-2.0)", ge=0.0, le=2.0
+    )
+    model: Optional[str] = Field(
+        None,
+        description="Model to use for editing. "
+        "gemini-3-pro-image-preview is best for complex multi-turn edits.",
+    )
+    output_format: str = Field(
+        "png",
+        description="Output format: png (default), jpeg, or webp",
     )
 
     @field_validator("prompt")
@@ -129,6 +219,17 @@ class EditImageInput(BaseModel):
         if path.suffix.lower() not in [".png", ".jpg", ".jpeg", ".webp"]:
             raise ValueError(f"Invalid image format: {path.suffix}")
         return str(path.absolute())
+
+    @field_validator("output_format")
+    @classmethod
+    def validate_output_format(cls, v: str) -> str:
+        """Validate output format is supported."""
+        v = v.lower()
+        if v not in OUTPUT_FORMATS:
+            raise ValueError(
+                f"Invalid output format. Must be one of: {', '.join(OUTPUT_FORMATS)}"
+            )
+        return v
 
 
 class AnalyzeImageInput(BaseModel):
