@@ -1,12 +1,14 @@
 """Unit tests for API client using gemini-imagen library."""
 
+from unittest.mock import AsyncMock, Mock, patch
+
 import pytest
-from pathlib import Path
-from unittest.mock import Mock, AsyncMock, patch
 from PIL import Image
 
 from pixelforge_mcp.utils.api_client import (
     DEFAULT_ANALYSIS_PROMPT,
+    PILLOW_FORMAT_MAP,
+    SAFETY_PRESETS,
     GenerationResult,
     ImagenAPIClient,
 )
@@ -53,7 +55,9 @@ class TestImagenAPIClient:
     def test_init_with_custom_params(self):
         """Test initialization with custom parameters."""
         client = ImagenAPIClient(
-            model_name="gemini-3-pro-image-preview", api_key="test-key", log_images=True
+            model_name="gemini-3-pro-image-preview",
+            api_key="test-key",
+            log_images=True,
         )
         assert client.model_name == "gemini-3-pro-image-preview"
         assert client.api_key == "test-key"
@@ -63,7 +67,6 @@ class TestImagenAPIClient:
     @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
     async def test_generate_success(self, mock_generator_class, tmp_path):
         """Test successful image generation."""
-        # Mock the generator instance and its generate method
         mock_generator = Mock()
         mock_result = Mock()
         mock_result.images = [Mock(spec=Image.Image)]
@@ -268,18 +271,15 @@ class TestImagenAPIClient:
         assert "models" in result.data
         assert "recommendation" in result.data
 
-        # Check models is a list of dicts with metadata
         models = result.data["models"]
         assert isinstance(models, list)
         assert len(models) == 3
 
-        # Verify model structure
         model_names = [m["name"] for m in models]
         assert "gemini-2.5-flash-image" in model_names
         assert "gemini-3-pro-image-preview" in model_names
         assert "gemini-3.1-flash-image-preview" in model_names
 
-        # Verify metadata fields exist
         for model in models:
             assert "name" in model
             assert "nickname" in model
@@ -309,6 +309,15 @@ class TestImagenAPIClient:
         assert nb2["temperature"] == {"min": 0.0, "max": 2.0, "default": 1.0}
 
     @pytest.mark.asyncio
+    async def test_list_models_person_generation_capability(self):
+        """Test all models advertise person_generation capability."""
+        client = ImagenAPIClient()
+        result = await client.list_models()
+
+        for model in result.data["models"]:
+            assert model["capabilities"]["person_generation"] is True
+
+    @pytest.mark.asyncio
     @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
     async def test_generator_caching(self, mock_generator_class):
         """Test that generator instance is cached."""
@@ -317,15 +326,13 @@ class TestImagenAPIClient:
 
         client = ImagenAPIClient()
 
-        # First call creates generator
         generator1 = client._get_generator()
         assert generator1 == mock_generator
         assert mock_generator_class.call_count == 1
 
-        # Second call returns cached instance
         generator2 = client._get_generator()
         assert generator2 == mock_generator
-        assert mock_generator_class.call_count == 1  # Not called again
+        assert mock_generator_class.call_count == 1
 
     @pytest.mark.asyncio
     @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
@@ -342,8 +349,196 @@ class TestImagenAPIClient:
         output_path = tmp_path / "test.png"
 
         await client.generate(
-            prompt="test", output_path=output_path, model="gemini-3-pro-image-preview"
+            prompt="test",
+            output_path=output_path,
+            model="gemini-3-pro-image-preview",
         )
 
-        # Verify model was changed
         assert mock_generator.model_name == "gemini-3-pro-image-preview"
+
+
+class TestSDKRouting:
+    """Tests for direct SDK routing logic."""
+
+    def test_needs_direct_sdk_with_image_size(self):
+        """Test routing to SDK when image_size is set."""
+        assert ImagenAPIClient._needs_direct_sdk(image_size="4K") is True
+
+    def test_needs_direct_sdk_with_person_generation(self):
+        """Test routing to SDK when person_generation is set."""
+        assert ImagenAPIClient._needs_direct_sdk(person_generation="allow_all") is True
+
+    def test_needs_direct_sdk_with_both(self):
+        """Test routing to SDK when both extended params are set."""
+        assert (
+            ImagenAPIClient._needs_direct_sdk(
+                image_size="2K", person_generation="dont_allow"
+            )
+            is True
+        )
+
+    def test_no_sdk_needed_for_basic_call(self):
+        """Test wrapper path used for basic calls."""
+        assert ImagenAPIClient._needs_direct_sdk() is False
+        assert ImagenAPIClient._needs_direct_sdk(image_size=None) is False
+        assert (
+            ImagenAPIClient._needs_direct_sdk(image_size=None, person_generation=None)
+            is False
+        )
+
+
+class TestSafetySettings:
+    """Tests for safety settings conversion."""
+
+    def test_build_safety_strict(self):
+        """Test strict safety preset builds correct settings."""
+        settings = ImagenAPIClient._build_safety_settings("preset:strict")
+        assert settings is not None
+        assert len(settings) == 4
+
+    def test_build_safety_relaxed(self):
+        """Test relaxed safety preset builds correct settings."""
+        settings = ImagenAPIClient._build_safety_settings("preset:relaxed")
+        assert settings is not None
+        assert len(settings) == 4
+
+    def test_build_safety_none_input(self):
+        """Test None input returns None."""
+        assert ImagenAPIClient._build_safety_settings(None) is None
+
+    def test_build_safety_non_preset(self):
+        """Test non-preset string returns None."""
+        assert ImagenAPIClient._build_safety_settings("custom:value") is None
+
+    def test_build_safety_invalid_preset(self):
+        """Test invalid preset name returns None."""
+        assert ImagenAPIClient._build_safety_settings("preset:invalid") is None
+
+
+class TestSaveImage:
+    """Tests for _save_image static method."""
+
+    def test_save_png(self, tmp_path):
+        """Test saving image as PNG."""
+        img = Image.new("RGB", (100, 100), color="red")
+        output_path = tmp_path / "test.png"
+
+        ImagenAPIClient._save_image(img, output_path, "png")
+
+        assert output_path.exists()
+        saved = Image.open(str(output_path))
+        assert saved.format == "PNG"
+
+    def test_save_jpeg(self, tmp_path):
+        """Test saving image as JPEG."""
+        img = Image.new("RGB", (100, 100), color="red")
+        output_path = tmp_path / "test.jpg"
+
+        ImagenAPIClient._save_image(img, output_path, "jpeg")
+
+        assert output_path.exists()
+        saved = Image.open(str(output_path))
+        assert saved.format == "JPEG"
+
+    def test_save_webp(self, tmp_path):
+        """Test saving image as WebP."""
+        img = Image.new("RGB", (100, 100), color="red")
+        output_path = tmp_path / "test.webp"
+
+        ImagenAPIClient._save_image(img, output_path, "webp")
+
+        assert output_path.exists()
+        saved = Image.open(str(output_path))
+        assert saved.format == "WEBP"
+
+    def test_save_jpeg_converts_rgba(self, tmp_path):
+        """Test JPEG saving converts RGBA to RGB."""
+        img = Image.new("RGBA", (100, 100), color=(255, 0, 0, 128))
+        output_path = tmp_path / "test.jpg"
+
+        ImagenAPIClient._save_image(img, output_path, "jpeg")
+
+        assert output_path.exists()
+        saved = Image.open(str(output_path))
+        assert saved.mode == "RGB"
+
+    def test_save_creates_parent_dirs(self, tmp_path):
+        """Test saving creates parent directories."""
+        output_path = tmp_path / "subdir" / "deep" / "test.png"
+        img = Image.new("RGB", (100, 100), color="red")
+
+        ImagenAPIClient._save_image(img, output_path, "png")
+
+        assert output_path.exists()
+
+
+class TestEditWithModel:
+    """Tests for edit with model override."""
+
+    @pytest.mark.asyncio
+    @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
+    async def test_edit_with_model_override(self, mock_generator_class, tmp_path):
+        """Test edit applies model override."""
+        mock_generator = Mock()
+        mock_result = Mock()
+        mock_result.images = [Mock(spec=Image.Image)]
+        mock_generator.generate = AsyncMock(return_value=mock_result)
+        mock_generator.model_name = "gemini-2.5-flash-image"
+        mock_generator_class.return_value = mock_generator
+
+        client = ImagenAPIClient()
+        input_path = tmp_path / "input.png"
+        input_path.touch()
+        output_path = tmp_path / "output.png"
+
+        result = await client.edit(
+            prompt="add clouds",
+            input_path=input_path,
+            output_path=output_path,
+            model="gemini-3-pro-image-preview",
+        )
+
+        assert result.success is True
+        assert mock_generator.model_name == "gemini-3-pro-image-preview"
+
+    @pytest.mark.asyncio
+    @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
+    async def test_edit_without_model_uses_default(
+        self, mock_generator_class, tmp_path
+    ):
+        """Test edit without model uses the client default."""
+        mock_generator = Mock()
+        mock_result = Mock()
+        mock_result.images = [Mock(spec=Image.Image)]
+        mock_generator.generate = AsyncMock(return_value=mock_result)
+        mock_generator_class.return_value = mock_generator
+
+        client = ImagenAPIClient(model_name="gemini-2.5-flash-image")
+        input_path = tmp_path / "input.png"
+        input_path.touch()
+        output_path = tmp_path / "output.png"
+
+        result = await client.edit(
+            prompt="add clouds",
+            input_path=input_path,
+            output_path=output_path,
+        )
+
+        assert result.success is True
+        assert result.data["model"] == "gemini-2.5-flash-image"
+
+
+class TestConstants:
+    """Tests for api_client constants."""
+
+    def test_pillow_format_map(self):
+        """Test Pillow format map has all formats."""
+        assert PILLOW_FORMAT_MAP["png"] == "PNG"
+        assert PILLOW_FORMAT_MAP["jpeg"] == "JPEG"
+        assert PILLOW_FORMAT_MAP["webp"] == "WEBP"
+
+    def test_safety_presets(self):
+        """Test safety presets are defined."""
+        assert "strict" in SAFETY_PRESETS
+        assert "relaxed" in SAFETY_PRESETS
+        assert "none" in SAFETY_PRESETS

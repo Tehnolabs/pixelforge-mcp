@@ -7,6 +7,11 @@ from pydantic import ValidationError
 
 from pixelforge_mcp.utils.validation import (
     ASPECT_RATIOS,
+    FORMAT_EXTENSIONS,
+    IMAGE_SIZES,
+    OUTPUT_FORMATS,
+    PERSON_GENERATION_OPTIONS,
+    PERSON_GENERATION_SDK_MAP,
     AnalyzeImageInput,
     EditImageInput,
     GenerateImageInput,
@@ -26,6 +31,10 @@ class TestGenerateImageInput:
         assert input_data.temperature == 0.7
         assert input_data.model is None
         assert input_data.safety_setting == "preset:strict"
+        assert input_data.image_size is None
+        assert input_data.number_of_images == 1
+        assert input_data.output_format == "png"
+        assert input_data.person_generation is None
 
     def test_valid_input_with_custom_values(self):
         """Test valid input with custom values."""
@@ -134,12 +143,156 @@ class TestGenerateImageInput:
         assert input_data.output_filename == "test.PNG"
 
 
+class TestGenerateImageSize:
+    """Tests for image_size validation."""
+
+    def test_valid_image_sizes(self):
+        """Test all valid image sizes are accepted."""
+        for size in IMAGE_SIZES:
+            input_data = GenerateImageInput(prompt="test", image_size=size)
+            assert input_data.image_size == size
+
+    def test_image_size_case_insensitive(self):
+        """Test image_size accepts lowercase and normalizes to uppercase."""
+        input_data = GenerateImageInput(prompt="test", image_size="4k")
+        assert input_data.image_size == "4K"
+
+        input_data = GenerateImageInput(prompt="test", image_size="2k")
+        assert input_data.image_size == "2K"
+
+    def test_invalid_image_size_rejected(self):
+        """Test invalid image sizes are rejected."""
+        with pytest.raises(ValidationError, match="Invalid image size"):
+            GenerateImageInput(prompt="test", image_size="8K")
+
+    def test_none_image_size_accepted(self):
+        """Test None image_size is accepted (uses API default)."""
+        input_data = GenerateImageInput(prompt="test", image_size=None)
+        assert input_data.image_size is None
+
+    def test_default_image_size_is_none(self):
+        """Test default image_size is None (API uses 1K)."""
+        input_data = GenerateImageInput(prompt="test")
+        assert input_data.image_size is None
+
+
+class TestGenerateNumberOfImages:
+    """Tests for number_of_images validation."""
+
+    def test_default_is_one(self):
+        """Test default number_of_images is 1."""
+        input_data = GenerateImageInput(prompt="test")
+        assert input_data.number_of_images == 1
+
+    def test_valid_range(self):
+        """Test valid range 1-4 is accepted."""
+        for n in [1, 2, 3, 4]:
+            input_data = GenerateImageInput(prompt="test", number_of_images=n)
+            assert input_data.number_of_images == n
+
+    def test_zero_rejected(self):
+        """Test 0 images is rejected."""
+        with pytest.raises(ValidationError):
+            GenerateImageInput(prompt="test", number_of_images=0)
+
+    def test_five_rejected(self):
+        """Test 5 images is rejected (max is 4)."""
+        with pytest.raises(ValidationError):
+            GenerateImageInput(prompt="test", number_of_images=5)
+
+    def test_negative_rejected(self):
+        """Test negative number is rejected."""
+        with pytest.raises(ValidationError):
+            GenerateImageInput(prompt="test", number_of_images=-1)
+
+
+class TestGenerateOutputFormat:
+    """Tests for output_format validation."""
+
+    def test_default_is_png(self):
+        """Test default output format is png."""
+        input_data = GenerateImageInput(prompt="test")
+        assert input_data.output_format == "png"
+
+    def test_all_valid_formats(self):
+        """Test all valid formats are accepted."""
+        for fmt in OUTPUT_FORMATS:
+            input_data = GenerateImageInput(prompt="test", output_format=fmt)
+            assert input_data.output_format == fmt
+
+    def test_format_case_insensitive(self):
+        """Test format is case insensitive."""
+        input_data = GenerateImageInput(prompt="test", output_format="JPEG")
+        assert input_data.output_format == "jpeg"
+
+        input_data = GenerateImageInput(prompt="test", output_format="WebP")
+        assert input_data.output_format == "webp"
+
+    def test_invalid_format_rejected(self):
+        """Test invalid formats are rejected."""
+        with pytest.raises(ValidationError, match="Invalid output format"):
+            GenerateImageInput(prompt="test", output_format="bmp")
+
+        with pytest.raises(ValidationError, match="Invalid output format"):
+            GenerateImageInput(prompt="test", output_format="gif")
+
+
+class TestGeneratePersonGeneration:
+    """Tests for person_generation validation."""
+
+    def test_default_is_none(self):
+        """Test default person_generation is None."""
+        input_data = GenerateImageInput(prompt="test")
+        assert input_data.person_generation is None
+
+    def test_all_valid_options(self):
+        """Test all valid person_generation options."""
+        for option in PERSON_GENERATION_OPTIONS:
+            input_data = GenerateImageInput(prompt="test", person_generation=option)
+            assert input_data.person_generation == option
+
+    def test_case_insensitive(self):
+        """Test person_generation is case insensitive."""
+        input_data = GenerateImageInput(prompt="test", person_generation="ALLOW_ALL")
+        assert input_data.person_generation == "allow_all"
+
+        input_data = GenerateImageInput(prompt="test", person_generation="Allow_Adult")
+        assert input_data.person_generation == "allow_adult"
+
+    def test_invalid_option_rejected(self):
+        """Test invalid person_generation is rejected."""
+        with pytest.raises(ValidationError, match="Invalid person generation"):
+            GenerateImageInput(prompt="test", person_generation="block_all")
+
+    def test_sdk_map_covers_all_options(self):
+        """Test SDK map has entries for all user-facing options."""
+        for option in PERSON_GENERATION_OPTIONS:
+            assert option in PERSON_GENERATION_SDK_MAP
+
+
+class TestGenerateAllNewParams:
+    """Tests for using all new params together."""
+
+    def test_all_new_params_combined(self):
+        """Test all new Phase 1 params work together."""
+        input_data = GenerateImageInput(
+            prompt="test prompt",
+            image_size="4K",
+            number_of_images=3,
+            output_format="webp",
+            person_generation="allow_all",
+        )
+        assert input_data.image_size == "4K"
+        assert input_data.number_of_images == 3
+        assert input_data.output_format == "webp"
+        assert input_data.person_generation == "allow_all"
+
+
 class TestEditImageInput:
     """Tests for EditImageInput validation."""
 
     def test_valid_input(self, tmp_path):
         """Test valid edit input."""
-        # Create test image file
         image_path = tmp_path / "test.png"
         image_path.touch()
 
@@ -177,7 +330,6 @@ class TestEditImageInput:
 
     def test_invalid_image_format_rejected(self, tmp_path):
         """Test invalid image format is rejected."""
-        # Create a non-image file
         text_file = tmp_path / "test.txt"
         text_file.touch()
 
@@ -189,7 +341,6 @@ class TestEditImageInput:
         image_path = tmp_path / "test.png"
         image_path.touch()
 
-        # Too low
         with pytest.raises(ValidationError):
             EditImageInput(
                 prompt="test",
@@ -197,12 +348,70 @@ class TestEditImageInput:
                 temperature=-0.1,
             )
 
-        # Too high
         with pytest.raises(ValidationError):
             EditImageInput(
                 prompt="test",
                 input_image_path=str(image_path),
                 temperature=2.1,
+            )
+
+    def test_model_param_accepted(self, tmp_path):
+        """Test model parameter is accepted for edit."""
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        input_data = EditImageInput(
+            prompt="add clouds",
+            input_image_path=str(image_path),
+            model="gemini-3-pro-image-preview",
+        )
+        assert input_data.model == "gemini-3-pro-image-preview"
+
+    def test_model_default_is_none(self, tmp_path):
+        """Test model default is None."""
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        input_data = EditImageInput(
+            prompt="add clouds",
+            input_image_path=str(image_path),
+        )
+        assert input_data.model is None
+
+    def test_output_format_accepted(self, tmp_path):
+        """Test output_format parameter for edit."""
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        for fmt in OUTPUT_FORMATS:
+            input_data = EditImageInput(
+                prompt="add clouds",
+                input_image_path=str(image_path),
+                output_format=fmt,
+            )
+            assert input_data.output_format == fmt
+
+    def test_output_format_default_is_png(self, tmp_path):
+        """Test output_format default is png."""
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        input_data = EditImageInput(
+            prompt="add clouds",
+            input_image_path=str(image_path),
+        )
+        assert input_data.output_format == "png"
+
+    def test_invalid_output_format_rejected(self, tmp_path):
+        """Test invalid output format is rejected for edit."""
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        with pytest.raises(ValidationError, match="Invalid output format"):
+            EditImageInput(
+                prompt="add clouds",
+                input_image_path=str(image_path),
+                output_format="bmp",
             )
 
 
@@ -326,3 +535,28 @@ class TestAspectRatios:
         panoramic_ratios = ["1:4", "4:1", "1:8", "8:1"]
         for ratio in panoramic_ratios:
             assert ratio in ASPECT_RATIOS, f"{ratio} should be in ASPECT_RATIOS"
+
+
+class TestConstants:
+    """Tests for validation constants."""
+
+    def test_format_extensions_complete(self):
+        """Test all output formats have an extension mapping."""
+        for fmt in OUTPUT_FORMATS:
+            assert fmt in FORMAT_EXTENSIONS
+
+    def test_format_extensions_have_dot(self):
+        """Test all extensions start with a dot."""
+        for ext in FORMAT_EXTENSIONS.values():
+            assert ext.startswith(".")
+
+    def test_image_sizes_are_uppercase(self):
+        """Test all image sizes are uppercase."""
+        for size in IMAGE_SIZES:
+            assert size == size.upper()
+
+    def test_person_generation_sdk_map_values(self):
+        """Test SDK map values are uppercase SDK format."""
+        for sdk_val in PERSON_GENERATION_SDK_MAP.values():
+            assert sdk_val == sdk_val.upper()
+            assert sdk_val.startswith("ALLOW_") or sdk_val == "ALLOW_NONE"
