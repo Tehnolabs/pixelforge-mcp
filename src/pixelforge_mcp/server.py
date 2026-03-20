@@ -9,8 +9,9 @@ from fastmcp import FastMCP
 from pydantic import ValidationError
 
 from .config import get_config
-from .utils.api_client import ImagenAPIClient, GenerationResult
+from .utils.api_client import GenerationResult, ImagenAPIClient
 from .utils.validation import (
+    FORMAT_EXTENSIONS,
     AnalyzeImageInput,
     EditImageInput,
     GenerateImageInput,
@@ -45,13 +46,16 @@ def get_api_client() -> ImagenAPIClient:
 
 
 def generate_output_path(
-    filename: Optional[str] = None, prefix: str = "generated"
+    filename: Optional[str] = None,
+    prefix: str = "generated",
+    output_format: str = "png",
 ) -> Path:
     """Generate a unique output path for an image.
 
     Args:
         filename: Custom filename (optional)
         prefix: Prefix for auto-generated filenames
+        output_format: Image format for extension (png, jpeg, webp)
 
     Returns:
         Path object for the output file
@@ -62,23 +66,15 @@ def generate_output_path(
     if filename:
         return output_dir / filename
 
-    # Generate unique filename with timestamp
+    ext = FORMAT_EXTENSIONS.get(output_format, ".png")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-    return output_dir / f"{prefix}_{timestamp}.png"
+    return output_dir / f"{prefix}_{timestamp}{ext}"
 
 
 def format_api_result(
     result: GenerationResult, image_path: Optional[Path] = None
 ) -> dict:
-    """Format API result for MCP response.
-
-    Args:
-        result: API execution result
-        image_path: Path to generated/edited image
-
-    Returns:
-        Formatted response dictionary
-    """
+    """Format API result for MCP response."""
     response = {
         "success": result.success,
         "message": result.output if result.success else result.error,
@@ -102,60 +98,55 @@ async def generate_image(
     temperature: float = 0.7,
     model: Optional[str] = None,
     safety_setting: str = "preset:strict",
+    image_size: Optional[str] = None,
+    number_of_images: int = 1,
+    output_format: str = "png",
+    person_generation: Optional[str] = None,
 ) -> dict:
     """Generate an image from a text prompt using Google Gemini.
 
     Args:
         prompt: Text description of the image to generate
-        output_filename: Custom filename (optional, will auto-generate if not provided)
-        aspect_ratio: Image dimensions (1:1, 16:9, 9:16, etc.)
-        temperature: Creativity level 0.0-2.0 (higher = more creative).
-            Per-model temperature ranges are available via list_available_models().
-        model: Specific model to use (optional). Available models:
-            - "gemini-2.5-flash-image" (default): Fast, cheap iterations
-            - "gemini-3-pro-image-preview": Max text fidelity, complex edits
-            - "gemini-3.1-flash-image-preview": Panoramic, grounded, fast 4K
-            Call list_available_models() for detailed model capabilities.
-        safety_setting: Content safety filter (preset:strict, preset:relaxed)
+        output_filename: Custom filename (optional, auto-generated if not provided)
+        aspect_ratio: Image dimensions (1:1, 16:9, 9:16, 4:3, 3:4, etc.)
+        temperature: Creativity level 0.0-2.0 (higher = more creative)
+        model: Model override. Options:
+            - "gemini-2.5-flash-image" (default): Fast, cheap
+            - "gemini-3-pro-image-preview": Best text, complex edits
+            - "gemini-3.1-flash-image-preview": Panoramic, fast 4K
+        safety_setting: Safety filter (preset:strict, preset:relaxed)
+        image_size: Output resolution: "1K" (default), "2K", or "4K".
+            4K requires gemini-3.1-flash or gemini-3-pro models.
+        number_of_images: Generate 1-4 variations (default: 1)
+        output_format: File format: "png" (default), "jpeg", or "webp"
+        person_generation: Person generation control:
+            "allow_all", "allow_adult", or "dont_allow"
 
     Returns:
-        Dictionary with generation result and image path
-
-    MODEL SWITCHING GUIDANCE:
-        Choose model based on your needs:
-        - Speed/iteration: gemini-2.5-flash-image (default)
-        - Panoramic/grounded: gemini-3.1-flash-image-preview
-        - Max text fidelity: gemini-3-pro-image-preview
-        - Complex editing: gemini-3-pro-image-preview
-
-        You can switch models on every request - no setup needed!
+        Dictionary with generation result, image path(s), and details
 
     Example:
-        # Fast iteration
-        generate_image(
-            prompt="Quick concept sketch",
-            model="gemini-2.5-flash-image"
-        )
+        # Simple generation
+        generate_image(prompt="A sunset over mountains")
 
-        # High quality final
+        # High-res with specific format
         generate_image(
-            prompt="Photorealistic portrait with intricate details",
-            model="gemini-3-pro-image-preview",
-            aspect_ratio="16:9",
-            temperature=0.8
-        )
-
-        # Panoramic with quality+speed
-        generate_image(
-            prompt="Mountain landscape panorama at golden hour",
+            prompt="Product photo of a watch",
             model="gemini-3.1-flash-image-preview",
-            aspect_ratio="8:1"
+            image_size="4K",
+            output_format="webp"
+        )
+
+        # Multiple variations
+        generate_image(
+            prompt="Logo design for a coffee shop",
+            number_of_images=4,
+            aspect_ratio="1:1"
         )
     """
     logger.info(f"Generating image: {prompt[:50]}...")
 
     try:
-        # Validate inputs
         inputs = GenerateImageInput(
             prompt=prompt,
             output_filename=output_filename,
@@ -163,33 +154,101 @@ async def generate_image(
             temperature=temperature,
             model=model,
             safety_setting=safety_setting,
+            image_size=image_size,
+            number_of_images=number_of_images,
+            output_format=output_format,
+            person_generation=person_generation,
         )
 
-        # Generate output path
-        output_path = generate_output_path(
-            filename=inputs.output_filename, prefix="generated"
-        )
-
-        # Execute generation
         client = get_api_client()
-        result = await client.generate(
-            prompt=inputs.prompt,
-            output_path=output_path,
-            aspect_ratio=inputs.aspect_ratio,
-            temperature=inputs.temperature,
-            model=inputs.model,
-            safety_setting=inputs.safety_setting,
-        )
 
-        # Format and return result
-        response = format_api_result(result, output_path if result.success else None)
+        # Single image (most common path)
+        if inputs.number_of_images == 1:
+            output_path = generate_output_path(
+                filename=inputs.output_filename,
+                prefix="generated",
+                output_format=inputs.output_format,
+            )
 
-        if result.success:
-            logger.info(f"Image generated successfully: {output_path}")
+            result = await client.generate(
+                prompt=inputs.prompt,
+                output_path=output_path,
+                aspect_ratio=inputs.aspect_ratio,
+                temperature=inputs.temperature,
+                model=inputs.model,
+                safety_setting=inputs.safety_setting,
+                image_size=inputs.image_size,
+                person_generation=inputs.person_generation,
+                output_format=inputs.output_format,
+            )
+
+            response = format_api_result(
+                result, output_path if result.success else None
+            )
+            if result.success:
+                logger.info(f"Image generated successfully: {output_path}")
+            else:
+                logger.error(f"Image generation failed: {result.error}")
+            return response
+
+        # Multiple images
+        generated = []
+        errors = []
+        for i in range(inputs.number_of_images):
+            suffix = f"_{i + 1}"
+            output_path = generate_output_path(
+                prefix=f"generated{suffix}",
+                output_format=inputs.output_format,
+            )
+
+            result = await client.generate(
+                prompt=inputs.prompt,
+                output_path=output_path,
+                aspect_ratio=inputs.aspect_ratio,
+                temperature=inputs.temperature,
+                model=inputs.model,
+                safety_setting=inputs.safety_setting,
+                image_size=inputs.image_size,
+                person_generation=inputs.person_generation,
+                output_format=inputs.output_format,
+            )
+
+            if result.success and output_path.exists():
+                generated.append(
+                    {
+                        "image_path": str(output_path.absolute()),
+                        "image_size_bytes": output_path.stat().st_size,
+                    }
+                )
+            else:
+                errors.append(result.error or "Unknown error")
+
+        if generated:
+            response = {
+                "success": True,
+                "message": f"Generated {len(generated)} of "
+                f"{inputs.number_of_images} images",
+                "image_path": generated[0]["image_path"],
+                "image_size_bytes": generated[0]["image_size_bytes"],
+                "images": generated,
+                "details": {
+                    "model": inputs.model,
+                    "aspect_ratio": inputs.aspect_ratio,
+                    "temperature": inputs.temperature,
+                    "image_size": inputs.image_size,
+                    "count": len(generated),
+                },
+            }
+            if errors:
+                response["errors"] = errors
+            logger.info(f"Generated {len(generated)} images")
+            return response
         else:
-            logger.error(f"Image generation failed: {result.error}")
-
-        return response
+            return {
+                "success": False,
+                "message": f"All {inputs.number_of_images} generations failed",
+                "errors": errors,
+            }
 
     except ValidationError as e:
         logger.error(f"Validation error: {e}")
@@ -211,6 +270,8 @@ async def edit_image(
     input_image_path: str,
     output_filename: Optional[str] = None,
     temperature: float = 0.7,
+    model: Optional[str] = None,
+    output_format: str = "png",
 ) -> dict:
     """Edit an existing image using a text prompt.
 
@@ -218,8 +279,10 @@ async def edit_image(
         prompt: Description of the desired changes
         input_image_path: Path to the image to edit
         output_filename: Custom filename for edited image (optional)
-        temperature: Creativity level 0.0-2.0.
-            Per-model temperature ranges are available via list_available_models().
+        temperature: Creativity level 0.0-2.0
+        model: Model override. "gemini-3-pro-image-preview" recommended
+            for complex multi-turn edits.
+        output_format: File format: "png" (default), "jpeg", or "webp"
 
     Returns:
         Dictionary with editing result and new image path
@@ -228,35 +291,37 @@ async def edit_image(
         edit_image(
             prompt="Add a rainbow in the sky",
             input_image_path="/path/to/image.png",
-            temperature=0.8
+            model="gemini-3-pro-image-preview"
         )
     """
     logger.info(f"Editing image: {input_image_path}")
 
     try:
-        # Validate inputs
         inputs = EditImageInput(
             prompt=prompt,
             input_image_path=input_image_path,
             output_filename=output_filename,
             temperature=temperature,
+            model=model,
+            output_format=output_format,
         )
 
-        # Generate output path
         output_path = generate_output_path(
-            filename=inputs.output_filename, prefix="edited"
+            filename=inputs.output_filename,
+            prefix="edited",
+            output_format=inputs.output_format,
         )
 
-        # Execute editing
         client = get_api_client()
         result = await client.edit(
             prompt=inputs.prompt,
             input_path=Path(inputs.input_image_path),
             output_path=output_path,
             temperature=inputs.temperature,
+            model=inputs.model,
+            output_format=inputs.output_format,
         )
 
-        # Format and return result
         response = format_api_result(result, output_path if result.success else None)
 
         if result.success:
@@ -318,14 +383,11 @@ async def analyze_image(image_path: str, prompt: Optional[str] = None) -> dict:
     logger.info(f"Analyzing image: {image_path}")
 
     try:
-        # Validate inputs
         inputs = AnalyzeImageInput(image_path=image_path, prompt=prompt)
 
-        # Execute analysis
         client = get_api_client()
         result = await client.analyze(Path(inputs.image_path), prompt=inputs.prompt)
 
-        # Format response
         if result.success and result.data:
             response = {
                 "success": True,
@@ -362,7 +424,7 @@ async def list_available_models() -> dict:
     - Model name and nickname
     - Speed and quality ratings
     - Best use cases and when to choose each model
-    - Specific capabilities (text rendering, resolution, etc.)
+    - Specific capabilities (text rendering, resolution, person generation, etc.)
 
     Use this tool to help decide which model to use for different tasks.
     Models can be switched on every generate_image() call via the 'model' parameter.
@@ -384,10 +446,13 @@ async def list_available_models() -> dict:
                 "success": True,
                 "models": result.data.get("models", []),
                 "recommendation": result.data.get("recommendation", ""),
-                "note": "Each model can be selected per-request using the 'model' parameter in generate_image()",
+                "note": (
+                    "Each model can be selected per-request using "
+                    "the 'model' parameter in generate_image() "
+                    "and edit_image()"
+                ),
             }
         else:
-            # Fallback - basic model list
             return {
                 "success": True,
                 "models": [
@@ -446,7 +511,12 @@ def get_server_info() -> dict:
             "enabled": True,
             "method": "per_request_parameter",
             "available_models": 3,
-            "guidance": "Models can be switched on every generate_image() call. Use 'model' parameter to override default. Call list_available_models() for detailed capabilities.",
+            "guidance": (
+                "Models can be switched on every "
+                "generate_image() and edit_image() call. "
+                "Use 'model' parameter to override default. "
+                "Call list_available_models() for details."
+            ),
             "quick_tips": {
                 "fast_iterations": "gemini-2.5-flash-image",
                 "panoramic_grounded": "gemini-3.1-flash-image-preview",
@@ -454,22 +524,25 @@ def get_server_info() -> dict:
                 "complex_editing": "gemini-3-pro-image-preview",
             },
         },
+        "features": {
+            "resolution_control": "1K/2K/4K via image_size parameter",
+            "multi_image": "1-4 variations via number_of_images parameter",
+            "output_formats": "png, jpeg, webp via output_format parameter",
+            "person_generation": "allow_all, allow_adult, dont_allow",
+        },
     }
 
 
 def main():
     """Main entry point for the MCP server."""
     try:
-        # Load configuration
         config = get_config()
 
-        # Set logging level
         logging.getLogger().setLevel(config.server.log_level)
 
         logger.info(f"Starting {config.server.name} v{config.server.version}")
         logger.info(f"Output directory: {config.storage.output_dir}")
 
-        # Run the server
         mcp.run()
 
     except Exception as e:
