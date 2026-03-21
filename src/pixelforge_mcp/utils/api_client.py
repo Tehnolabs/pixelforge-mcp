@@ -281,6 +281,7 @@ class ImagenAPIClient:
         image_paths: List[Path],
         prompt: str,
         model: Optional[str] = None,
+        use_grounding: bool = False,
     ) -> GenerationResult:
         """Analyze one or more images with a text prompt via SDK."""
         try:
@@ -295,9 +296,15 @@ class ImagenAPIClient:
                 content.append(img)
             content.append(prompt)
 
-            config = types.GenerateContentConfig(
-                response_modalities=["TEXT"],
-            )
+            config_params: Dict[str, Any] = {
+                "response_modalities": ["TEXT"],
+            }
+            if use_grounding:
+                config_params["tools"] = [
+                    types.Tool(google_search=types.GoogleSearch())
+                ]
+
+            config = types.GenerateContentConfig(**config_params)
             response = await client.aio.models.generate_content(
                 model=model or TEXT_MODEL, contents=content, config=config
             )
@@ -372,6 +379,7 @@ class ImagenAPIClient:
         person_generation: Optional[str] = None,
         reference_images: Optional[List[str]] = None,
         output_format: str = "png",
+        thinking_budget: Optional[int] = None,
     ) -> GenerationResult:
         """Generate using google-genai SDK directly."""
         try:
@@ -404,6 +412,12 @@ class ImagenAPIClient:
             safety_settings = self._build_safety_settings(safety_setting)
             if safety_settings:
                 config_params["safety_settings"] = safety_settings
+
+            # Thinking config (for models that support it)
+            if thinking_budget is not None and thinking_budget > 0:
+                config_params["thinking_config"] = types.ThinkingConfig(
+                    thinking_budget=thinking_budget
+                )
 
             config = types.GenerateContentConfig(**config_params)
 
@@ -571,6 +585,7 @@ class ImagenAPIClient:
         person_generation: Optional[str] = None,
         reference_images: Optional[List[str]] = None,
         output_format: str = "png",
+        thinking_budget: Optional[int] = None,
     ) -> GenerationResult:
         """Generate an image from a text prompt.
 
@@ -603,6 +618,7 @@ class ImagenAPIClient:
             person_generation=person_generation,
             reference_images=reference_images,
             output_format=output_format,
+            thinking_budget=thinking_budget,
         )
 
     async def edit(
@@ -685,13 +701,18 @@ class ImagenAPIClient:
         image_path: Path,
         prompt: Optional[str] = None,
         model: Optional[str] = None,
+        use_grounding: bool = False,
     ) -> GenerationResult:
         """Analyze an image and get a description via direct SDK."""
         kwargs: Dict[str, Any] = {}
         if model is not None:
             kwargs["model"] = model
+        if use_grounding:
+            kwargs["use_grounding"] = True
         result = await self._analyze_with_images(
-            [image_path], prompt or DEFAULT_ANALYSIS_PROMPT, **kwargs
+            [image_path],
+            prompt or DEFAULT_ANALYSIS_PROMPT,
+            **kwargs,
         )
         # Add image_path to result data for backward compatibility
         if result.success and result.data:
@@ -699,13 +720,18 @@ class ImagenAPIClient:
         return result
 
     async def extract_text(
-        self, image_path: Path, model: Optional[str] = None
+        self,
+        image_path: Path,
+        model: Optional[str] = None,
+        use_grounding: bool = False,
     ) -> GenerationResult:
         """Extract text from an image using OCR."""
         try:
             kwargs: Dict[str, Any] = {}
             if model is not None:
                 kwargs["model"] = model
+            if use_grounding:
+                kwargs["use_grounding"] = True
             text = await self._call_text_model_with_image(
                 image_path, OCR_PROMPT, **kwargs
             )
@@ -745,6 +771,7 @@ class ImagenAPIClient:
         image_path: Path,
         objects: Optional[str] = None,
         model: Optional[str] = None,
+        use_grounding: bool = False,
     ) -> GenerationResult:
         """Detect objects in an image with bounding boxes."""
         try:
@@ -754,6 +781,8 @@ class ImagenAPIClient:
             det_kwargs: Dict[str, Any] = {}
             if model is not None:
                 det_kwargs["model"] = model
+            if use_grounding:
+                det_kwargs["use_grounding"] = True
             text = await self._call_text_model_with_image(
                 image_path, prompt, **det_kwargs
             )
@@ -792,13 +821,18 @@ class ImagenAPIClient:
         image_paths: List[Path],
         prompt: Optional[str] = None,
         model: Optional[str] = None,
+        use_grounding: bool = False,
     ) -> GenerationResult:
         """Compare multiple images."""
         kwargs: Dict[str, Any] = {}
         if model is not None:
             kwargs["model"] = model
+        if use_grounding:
+            kwargs["use_grounding"] = True
         return await self._analyze_with_images(
-            image_paths, prompt or COMPARE_IMAGES_PROMPT, **kwargs
+            image_paths,
+            prompt or COMPARE_IMAGES_PROMPT,
+            **kwargs,
         )
 
     # ------------------------------------------------------------------
@@ -885,6 +919,7 @@ class ImagenAPIClient:
         image_path: Path,
         prompt: str,
         model: Optional[str] = None,
+        use_grounding: bool = False,
     ) -> str:
         """Call text model with a single image + prompt."""
         from google.genai import types
@@ -892,9 +927,13 @@ class ImagenAPIClient:
         client = self._get_genai_client()
         img = Image.open(str(image_path))
 
-        config = types.GenerateContentConfig(
-            response_modalities=["TEXT"],
-        )
+        config_params: Dict[str, Any] = {
+            "response_modalities": ["TEXT"],
+        }
+        if use_grounding:
+            config_params["tools"] = [types.Tool(google_search=types.GoogleSearch())]
+
+        config = types.GenerateContentConfig(**config_params)
         response = await client.aio.models.generate_content(
             model=model or TEXT_MODEL,
             contents=[img, prompt],
@@ -907,6 +946,177 @@ class ImagenAPIClient:
             raise RuntimeError(blocked.error)
 
         return self._extract_text_from_response(response)
+
+    # ------------------------------------------------------------------
+    # Vertex AI tools (optional)
+    # ------------------------------------------------------------------
+
+    def _get_vertex_client(self) -> Any:
+        """Get a Vertex AI-authenticated genai client.
+
+        Raises ImportError if google-cloud-aiplatform is not installed.
+        """
+        try:
+            from google import genai
+
+            # Vertex AI client uses project/location instead of API key
+            from pixelforge_mcp.config import get_config
+
+            config = get_config()
+
+            return genai.Client(
+                vertexai=True,
+                project=config.vertex.project_id,
+                location=config.vertex.location,
+            )
+        except ImportError:
+            raise ImportError(
+                "Vertex AI requires google-cloud-aiplatform. "
+                "Install with: pip install pixelforge-mcp[vertex]"
+            )
+
+    async def upscale(
+        self,
+        image_path: Path,
+        output_path: Path,
+        upscale_factor: str = "x2",
+        output_format: str = "png",
+    ) -> GenerationResult:
+        """Upscale an image using Vertex AI (requires Vertex credentials)."""
+        try:
+            from google.genai import types
+
+            client = self._get_vertex_client()
+            img = Image.open(str(image_path))
+
+            response = await asyncio.to_thread(
+                client.models.upscale_image,
+                model="imagen-4.0-upscale-preview",
+                image=img,
+                upscale_factor=upscale_factor,
+                config=types.UpscaleImageConfig(
+                    output_mime_type="image/png",
+                ),
+            )
+
+            if response.generated_images:
+                result_img = response.generated_images[0].image
+                self._save_image(result_img, output_path, output_format)
+                return GenerationResult(
+                    success=True,
+                    output=f"Image upscaled ({upscale_factor}) to {output_path}",
+                    images=[result_img],
+                    image_paths=[str(output_path)],
+                    data={
+                        "upscale_factor": upscale_factor,
+                        "image_path": str(output_path),
+                    },
+                )
+            else:
+                return GenerationResult(
+                    success=False,
+                    output="",
+                    error="Upscaling produced no output",
+                )
+
+        except ImportError as e:
+            return GenerationResult(success=False, output="", error=str(e))
+        except Exception as e:
+            error_msg = self._classify_error(e)
+            logger.error(f"Upscaling failed: {error_msg}", exc_info=True)
+            return GenerationResult(success=False, output="", error=error_msg)
+
+    async def advanced_edit(
+        self,
+        image_path: Path,
+        prompt: str,
+        edit_mode: str,
+        output_path: Path,
+        mask_path: Optional[Path] = None,
+        output_format: str = "png",
+    ) -> GenerationResult:
+        """Advanced image editing using Vertex AI EditImage API."""
+        try:
+            from google.genai import types
+
+            client = self._get_vertex_client()
+
+            # Map user-friendly mode names to SDK enum values
+            mode_map = {
+                "inpaint_removal": "EDIT_MODE_INPAINT_REMOVAL",
+                "inpaint_insertion": "EDIT_MODE_INPAINT_INSERTION",
+                "outpaint": "EDIT_MODE_OUTPAINT",
+                "background_swap": "EDIT_MODE_BGSWAP",
+                "style_transfer": "EDIT_MODE_STYLE",
+                "product_image": "EDIT_MODE_PRODUCT_IMAGE",
+            }
+            sdk_mode = mode_map.get(edit_mode)
+            if not sdk_mode:
+                return GenerationResult(
+                    success=False,
+                    output="",
+                    error=f"Unknown edit mode: {edit_mode}",
+                )
+
+            img = Image.open(str(image_path))
+
+            # Build reference images
+            reference_images = [
+                types.RawReferenceImage(
+                    reference_image=img,
+                    reference_id=0,
+                )
+            ]
+            if mask_path:
+                mask_img = Image.open(str(mask_path))
+                reference_images.append(
+                    types.MaskReferenceImage(
+                        reference_image=mask_img,
+                        reference_id=0,
+                        mask_mode="MASK_MODE_USER_PROVIDED",
+                    )
+                )
+
+            config = types.EditImageConfig(
+                edit_mode=sdk_mode,
+                number_of_images=1,
+                output_mime_type="image/png",
+            )
+
+            response = await asyncio.to_thread(
+                client.models.edit_image,
+                model="imagen-3.0-capability-001",
+                prompt=prompt,
+                reference_images=reference_images,
+                config=config,
+            )
+
+            if response.generated_images:
+                result_img = response.generated_images[0].image
+                self._save_image(result_img, output_path, output_format)
+                return GenerationResult(
+                    success=True,
+                    output=f"Advanced edit ({edit_mode}) applied to {output_path}",
+                    images=[result_img],
+                    image_paths=[str(output_path)],
+                    data={
+                        "edit_mode": edit_mode,
+                        "image_path": str(output_path),
+                    },
+                )
+            else:
+                return GenerationResult(
+                    success=False,
+                    output="",
+                    error="Advanced edit produced no output",
+                )
+
+        except ImportError as e:
+            return GenerationResult(success=False, output="", error=str(e))
+        except Exception as e:
+            error_msg = self._classify_error(e)
+            logger.error(f"Advanced edit failed: {error_msg}", exc_info=True)
+            return GenerationResult(success=False, output="", error=error_msg)
 
     # ------------------------------------------------------------------
     # Info tools
