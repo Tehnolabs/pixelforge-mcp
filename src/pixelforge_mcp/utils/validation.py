@@ -83,6 +83,15 @@ COST_TABLE = {
         "edit": 0.04,
         "analyze": 0.01,
     },
+    "imagen-4.0-generate-001": {
+        "generate": 0.04,
+    },
+    "imagen-4.0-ultra-generate-001": {
+        "generate": 0.06,
+    },
+    "imagen-4.0-fast-generate-001": {
+        "generate": 0.02,
+    },
 }
 
 # Quality presets map to model + image_size combinations

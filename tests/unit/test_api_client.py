@@ -1,13 +1,13 @@
-"""Unit tests for API client using gemini-imagen library."""
+"""Unit tests for API client using google-genai SDK."""
 
-from unittest.mock import AsyncMock, Mock, patch
+import io
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from PIL import Image
 
 from pixelforge_mcp.utils.api_client import (
     COMPARE_IMAGES_PROMPT,
-    DEFAULT_ANALYSIS_PROMPT,
     OCR_PROMPT,
     PILLOW_FORMAT_MAP,
     SAFETY_PRESETS,
@@ -141,18 +141,28 @@ class TestImagenAPIClient:
         assert "API error" in result.error
 
     @pytest.mark.asyncio
-    @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
-    async def test_edit_success(self, mock_generator_class, tmp_path):
-        """Test successful image editing."""
-        mock_generator = Mock()
-        mock_result = Mock()
-        mock_result.images = [Mock(spec=Image.Image)]
-        mock_generator.generate = AsyncMock(return_value=mock_result)
-        mock_generator_class.return_value = mock_generator
+    async def test_edit_success(self, tmp_path):
+        """Test successful image editing via direct SDK."""
+        test_img = Image.new("RGB", (10, 10), color="red")
+        buf = io.BytesIO()
+        test_img.save(buf, format="PNG")
+        img_bytes = buf.getvalue()
 
-        client = ImagenAPIClient()
+        mock_part = Mock()
+        mock_part.inline_data = Mock(data=img_bytes)
+        mock_candidate = Mock()
+        mock_candidate.content.parts = [mock_part]
+        mock_response = Mock(candidates=[mock_candidate])
+        mock_response.prompt_feedback = None
+
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
         input_path = tmp_path / "input.png"
-        input_path.touch()
+        test_img.save(str(input_path))
         output_path = tmp_path / "output.png"
 
         result = await client.edit(
@@ -163,29 +173,32 @@ class TestImagenAPIClient:
         )
 
         assert result.success is True
-        assert result.images == mock_result.images
+        assert result.images is not None
+        assert len(result.images) == 1
         assert result.image_paths == [str(output_path)]
+        assert output_path.exists()
 
-        # Verify generate was called with input image
-        call_kwargs = mock_generator.generate.call_args[1]
-        assert call_kwargs["prompt"] == "add clouds"
-        assert call_kwargs["input_images"] == [str(input_path)]
-        assert call_kwargs["output_images"] == [str(output_path)]
-        assert call_kwargs["temperature"] == 0.7
+        # Verify generate_content was called with image + prompt
+        call_kwargs = mock_client.aio.models.generate_content.call_args[1]
+        assert call_kwargs["contents"][1] == "add clouds"
+        assert isinstance(call_kwargs["contents"][0], Image.Image)
 
     @pytest.mark.asyncio
-    @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
-    async def test_edit_failure(self, mock_generator_class, tmp_path):
-        """Test failed image editing."""
-        mock_generator = Mock()
-        mock_result = Mock()
-        mock_result.images = None
-        mock_generator.generate = AsyncMock(return_value=mock_result)
-        mock_generator_class.return_value = mock_generator
+    async def test_edit_failure(self, tmp_path):
+        """Test failed image editing when response has no inline_data."""
+        mock_candidate = Mock()
+        mock_candidate.content.parts = []
+        mock_response = Mock(candidates=[mock_candidate])
+        mock_response.prompt_feedback = None
 
-        client = ImagenAPIClient()
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
         input_path = tmp_path / "input.png"
-        input_path.touch()
+        Image.new("RGB", (10, 10)).save(str(input_path))
         output_path = tmp_path / "output.png"
 
         result = await client.edit(
@@ -196,45 +209,51 @@ class TestImagenAPIClient:
         assert result.error == "No images generated"
 
     @pytest.mark.asyncio
-    @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
-    async def test_analyze_success(self, mock_generator_class, tmp_path):
-        """Test successful image analysis."""
-        mock_generator = Mock()
-        mock_result = Mock()
-        mock_result.text = "A beautiful sunset over mountains"
-        mock_generator.generate = AsyncMock(return_value=mock_result)
-        mock_generator_class.return_value = mock_generator
+    async def test_analyze_success(self, tmp_path):
+        """Test successful image analysis via direct SDK."""
+        mock_part = Mock()
+        mock_part.text = "A beautiful sunset over mountains"
+        mock_part.inline_data = None
+        mock_candidate = Mock()
+        mock_candidate.content.parts = [mock_part]
+        mock_response = Mock(candidates=[mock_candidate])
+        mock_response.prompt_feedback = None
 
-        client = ImagenAPIClient()
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
         image_path = tmp_path / "test.png"
-        image_path.touch()
+        Image.new("RGB", (10, 10)).save(str(image_path))
 
         result = await client.analyze(image_path)
 
         assert result.success is True
         assert result.output == "A beautiful sunset over mountains"
         assert result.data["analysis"] == "A beautiful sunset over mountains"
-        assert str(image_path) in result.data["image_path"]
-
-        # Verify generate was called with default prompt and output_text=True
-        call_kwargs = mock_generator.generate.call_args[1]
-        assert call_kwargs["prompt"] == DEFAULT_ANALYSIS_PROMPT
-        assert call_kwargs["input_images"] == [str(image_path)]
-        assert call_kwargs["output_text"] is True
+        assert result.data["image_path"] == str(image_path)
 
     @pytest.mark.asyncio
-    @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
-    async def test_analyze_with_custom_prompt(self, mock_generator_class, tmp_path):
+    async def test_analyze_with_custom_prompt(self, tmp_path):
         """Test image analysis with a custom prompt."""
-        mock_generator = Mock()
-        mock_result = Mock()
-        mock_result.text = "Text found: Hello World"
-        mock_generator.generate = AsyncMock(return_value=mock_result)
-        mock_generator_class.return_value = mock_generator
+        mock_part = Mock()
+        mock_part.text = "Text found: Hello World"
+        mock_part.inline_data = None
+        mock_candidate = Mock()
+        mock_candidate.content.parts = [mock_part]
+        mock_response = Mock(candidates=[mock_candidate])
+        mock_response.prompt_feedback = None
 
-        client = ImagenAPIClient()
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
         image_path = tmp_path / "test.png"
-        image_path.touch()
+        Image.new("RGB", (10, 10)).save(str(image_path))
 
         custom_prompt = "Extract all visible text from this image"
         result = await client.analyze(image_path, prompt=custom_prompt)
@@ -242,25 +261,27 @@ class TestImagenAPIClient:
         assert result.success is True
         assert result.output == "Text found: Hello World"
 
-        # Verify custom prompt was used instead of default
-        call_kwargs = mock_generator.generate.call_args[1]
-        assert call_kwargs["prompt"] == custom_prompt
-        assert call_kwargs["input_images"] == [str(image_path)]
-        assert call_kwargs["output_text"] is True
+        # Verify custom prompt was passed in contents
+        call_kwargs = mock_client.aio.models.generate_content.call_args[1]
+        contents = call_kwargs["contents"]
+        assert contents[-1] == custom_prompt
 
     @pytest.mark.asyncio
-    @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
-    async def test_analyze_failure(self, mock_generator_class, tmp_path):
-        """Test failed image analysis."""
-        mock_generator = Mock()
-        mock_result = Mock()
-        mock_result.text = None
-        mock_generator.generate = AsyncMock(return_value=mock_result)
-        mock_generator_class.return_value = mock_generator
+    async def test_analyze_failure(self, tmp_path):
+        """Test failed image analysis with empty response."""
+        mock_candidate = Mock()
+        mock_candidate.content.parts = []
+        mock_response = Mock(candidates=[mock_candidate])
+        mock_response.prompt_feedback = None
 
-        client = ImagenAPIClient()
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
         image_path = tmp_path / "test.png"
-        image_path.touch()
+        Image.new("RGB", (10, 10)).save(str(image_path))
 
         result = await client.analyze(image_path)
 
@@ -280,12 +301,14 @@ class TestImagenAPIClient:
 
         models = result.data["models"]
         assert isinstance(models, list)
-        assert len(models) == 3
+        assert len(models) == 5
 
         model_names = [m["name"] for m in models]
         assert "gemini-2.5-flash-image" in model_names
         assert "gemini-3-pro-image-preview" in model_names
         assert "gemini-3.1-flash-image-preview" in model_names
+        assert "imagen-4.0-generate-001" in model_names
+        assert "imagen-4.0-fast-generate-001" in model_names
 
         for model in models:
             assert "name" in model
@@ -323,23 +346,6 @@ class TestImagenAPIClient:
 
         for model in result.data["models"]:
             assert model["capabilities"]["person_generation"] is True
-
-    @pytest.mark.asyncio
-    @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
-    async def test_generator_caching(self, mock_generator_class):
-        """Test that generator instance is cached."""
-        mock_generator = Mock()
-        mock_generator_class.return_value = mock_generator
-
-        client = ImagenAPIClient()
-
-        generator1 = client._get_generator()
-        assert generator1 == mock_generator
-        assert mock_generator_class.call_count == 1
-
-        generator2 = client._get_generator()
-        assert generator2 == mock_generator
-        assert mock_generator_class.call_count == 1
 
     @pytest.mark.asyncio
     async def test_generate_model_override(self, tmp_path):
@@ -463,18 +469,28 @@ class TestEditWithModel:
     """Tests for edit with model override."""
 
     @pytest.mark.asyncio
-    @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
-    async def test_edit_with_model_override(self, mock_generator_class, tmp_path):
-        """Test edit creates a fresh generator with model override."""
-        mock_generator = Mock()
-        mock_result = Mock()
-        mock_result.images = [Mock(spec=Image.Image)]
-        mock_generator.generate = AsyncMock(return_value=mock_result)
-        mock_generator_class.return_value = mock_generator
+    async def test_edit_with_model_override(self, tmp_path):
+        """Test edit passes model override to generate_content."""
+        test_img = Image.new("RGB", (10, 10), color="red")
+        buf = io.BytesIO()
+        test_img.save(buf, format="PNG")
+        img_bytes = buf.getvalue()
 
-        client = ImagenAPIClient()
+        mock_part = Mock()
+        mock_part.inline_data = Mock(data=img_bytes)
+        mock_candidate = Mock()
+        mock_candidate.content.parts = [mock_part]
+        mock_response = Mock(candidates=[mock_candidate])
+        mock_response.prompt_feedback = None
+
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
         input_path = tmp_path / "input.png"
-        input_path.touch()
+        test_img.save(str(input_path))
         output_path = tmp_path / "output.png"
 
         result = await client.edit(
@@ -485,29 +501,35 @@ class TestEditWithModel:
         )
 
         assert result.success is True
-        # BUG-3 fix: a fresh generator is created with the override model
-        # instead of mutating the cached singleton
-        mock_generator_class.assert_called_with(
-            model_name="gemini-3-pro-image-preview",
-            api_key=client.api_key,
-            log_images=client.log_images,
-        )
+        # Verify the model was passed to the SDK call
+        call_kwargs = mock_client.aio.models.generate_content.call_args[1]
+        assert call_kwargs["model"] == "gemini-3-pro-image-preview"
 
     @pytest.mark.asyncio
-    @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
-    async def test_edit_without_model_uses_default(
-        self, mock_generator_class, tmp_path
-    ):
+    async def test_edit_without_model_uses_default(self, tmp_path):
         """Test edit without model uses the client default."""
-        mock_generator = Mock()
-        mock_result = Mock()
-        mock_result.images = [Mock(spec=Image.Image)]
-        mock_generator.generate = AsyncMock(return_value=mock_result)
-        mock_generator_class.return_value = mock_generator
+        test_img = Image.new("RGB", (10, 10), color="red")
+        buf = io.BytesIO()
+        test_img.save(buf, format="PNG")
+        img_bytes = buf.getvalue()
 
-        client = ImagenAPIClient(model_name="gemini-2.5-flash-image")
+        mock_part = Mock()
+        mock_part.inline_data = Mock(data=img_bytes)
+        mock_candidate = Mock()
+        mock_candidate.content.parts = [mock_part]
+        mock_response = Mock(candidates=[mock_candidate])
+        mock_response.prompt_feedback = None
+
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+        client = ImagenAPIClient(
+            model_name="gemini-2.5-flash-image", api_key="test-key"
+        )
+        client._genai_client = mock_client
+
         input_path = tmp_path / "input.png"
-        input_path.touch()
+        test_img.save(str(input_path))
         output_path = tmp_path / "output.png"
 
         result = await client.edit(
@@ -889,52 +911,63 @@ class TestRemoveBackground:
     """Tests for remove_background method."""
 
     @pytest.mark.asyncio
-    @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
-    async def test_remove_bg_success(self, mock_generator_class, tmp_path):
-        """Test successful background removal."""
-        mock_generator = Mock()
-        mock_result = Mock()
-        mock_result.images = [Mock(spec=Image.Image)]
-        mock_generator.generate = AsyncMock(return_value=mock_result)
-        mock_generator_class.return_value = mock_generator
+    async def test_remove_bg_success(self, tmp_path):
+        """Test successful background removal via direct SDK."""
+        test_img = Image.new("RGB", (10, 10), color="red")
+        buf = io.BytesIO()
+        test_img.save(buf, format="PNG")
+        img_bytes = buf.getvalue()
 
-        client = ImagenAPIClient()
+        mock_part = Mock()
+        mock_part.inline_data = Mock(data=img_bytes)
+        mock_candidate = Mock()
+        mock_candidate.content.parts = [mock_part]
+        mock_response = Mock(candidates=[mock_candidate])
+        mock_response.prompt_feedback = None
+
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
         image_path = tmp_path / "input.png"
-        image_path.touch()
+        test_img.save(str(image_path))
         output_path = tmp_path / "output.png"
 
         result = await client.remove_background(image_path, output_path)
 
         assert result.success is True
         assert "Background removed" in result.output
-        assert result.images == mock_result.images
+        assert result.images is not None
         assert result.image_paths == [str(output_path)]
         assert result.data["image_path"] == str(output_path)
-
-        # Verify generator was called with correct params
-        call_kwargs = mock_generator.generate.call_args[1]
-        assert "Remove the background" in call_kwargs["prompt"]
-        assert call_kwargs["input_images"] == [str(image_path)]
-        assert call_kwargs["output_images"] == [str(output_path)]
+        assert output_path.exists()
 
     @pytest.mark.asyncio
-    @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
-    async def test_remove_bg_format_conversion(self, mock_generator_class, tmp_path):
+    async def test_remove_bg_format_conversion(self, tmp_path):
         """Test background removal with format conversion."""
-        mock_generator = Mock()
-        mock_result = Mock()
-        mock_result.images = [Mock(spec=Image.Image)]
-        mock_generator.generate = AsyncMock(return_value=mock_result)
-        mock_generator_class.return_value = mock_generator
-
-        client = ImagenAPIClient()
-        image_path = tmp_path / "input.png"
-        image_path.touch()
-        output_path = tmp_path / "output.jpg"
-
-        # Create a real image at the output path so re-encoding can open it
         test_img = Image.new("RGB", (10, 10), color="red")
-        test_img.save(str(output_path), format="PNG")
+        buf = io.BytesIO()
+        test_img.save(buf, format="PNG")
+        img_bytes = buf.getvalue()
+
+        mock_part = Mock()
+        mock_part.inline_data = Mock(data=img_bytes)
+        mock_candidate = Mock()
+        mock_candidate.content.parts = [mock_part]
+        mock_response = Mock(candidates=[mock_candidate])
+        mock_response.prompt_feedback = None
+
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
+        image_path = tmp_path / "input.png"
+        test_img.save(str(image_path))
+        output_path = tmp_path / "output.jpg"
 
         result = await client.remove_background(
             image_path, output_path, output_format="jpeg"
@@ -943,18 +976,21 @@ class TestRemoveBackground:
         assert result.success is True
 
     @pytest.mark.asyncio
-    @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
-    async def test_remove_bg_failure(self, mock_generator_class, tmp_path):
-        """Test background removal with no images result."""
-        mock_generator = Mock()
-        mock_result = Mock()
-        mock_result.images = None
-        mock_generator.generate = AsyncMock(return_value=mock_result)
-        mock_generator_class.return_value = mock_generator
+    async def test_remove_bg_failure(self, tmp_path):
+        """Test background removal with no images in response."""
+        mock_candidate = Mock()
+        mock_candidate.content.parts = []
+        mock_response = Mock(candidates=[mock_candidate])
+        mock_response.prompt_feedback = None
 
-        client = ImagenAPIClient()
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
         image_path = tmp_path / "input.png"
-        image_path.touch()
+        Image.new("RGB", (10, 10)).save(str(image_path))
         output_path = tmp_path / "output.png"
 
         result = await client.remove_background(image_path, output_path)
@@ -963,18 +999,18 @@ class TestRemoveBackground:
         assert result.error == "Background removal failed"
 
     @pytest.mark.asyncio
-    @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
-    async def test_remove_bg_exception(self, mock_generator_class, tmp_path):
+    async def test_remove_bg_exception(self, tmp_path):
         """Test background removal handles exceptions."""
-        mock_generator = Mock()
-        mock_generator.generate = AsyncMock(
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(
             side_effect=Exception("Service unavailable")
         )
-        mock_generator_class.return_value = mock_generator
 
-        client = ImagenAPIClient()
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
         image_path = tmp_path / "input.png"
-        image_path.touch()
+        Image.new("RGB", (10, 10)).save(str(image_path))
         output_path = tmp_path / "output.png"
 
         result = await client.remove_background(image_path, output_path)
@@ -1118,3 +1154,88 @@ class TestCallTextModelWithImage:
         result = await client._call_text_model_with_image(image_path, "Describe this")
 
         assert result == ""
+
+
+class TestImagen4:
+    """Tests for Imagen 4 generation via client.models.generate_images."""
+
+    @pytest.mark.asyncio
+    async def test_imagen4_generate_success(self, tmp_path):
+        """Test successful Imagen 4 generation."""
+        test_img = Image.new("RGB", (10, 10), color="green")
+
+        mock_generated = Mock()
+        mock_generated.image = test_img
+        mock_response = Mock()
+        mock_response.generated_images = [mock_generated]
+
+        mock_client = Mock()
+        mock_client.models.generate_images = Mock(return_value=mock_response)
+
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+        output_path = tmp_path / "imagen4_out.png"
+
+        result = await client.generate(
+            prompt="a cat sitting on a chair",
+            output_path=output_path,
+            model="imagen-4.0-generate-001",
+        )
+
+        assert result.success is True
+        assert result.images is not None
+        assert len(result.images) == 1
+        assert result.image_paths == [str(output_path)]
+        assert result.data["model"] == "imagen-4.0-generate-001"
+        assert output_path.exists()
+
+    @pytest.mark.asyncio
+    async def test_imagen4_auto_routing(self, tmp_path):
+        """Test that generate() auto-routes Imagen 4 models."""
+        test_img = Image.new("RGB", (10, 10), color="blue")
+
+        mock_generated = Mock()
+        mock_generated.image = test_img
+        mock_response = Mock()
+        mock_response.generated_images = [mock_generated]
+
+        mock_client = Mock()
+        mock_client.models.generate_images = Mock(return_value=mock_response)
+        # Also set up aio.models to verify it is NOT called
+        mock_client.aio.models.generate_content = AsyncMock()
+
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+        output_path = tmp_path / "out.png"
+
+        await client.generate(
+            prompt="test",
+            output_path=output_path,
+            model="imagen-4.0-generate-001",
+        )
+
+        # Imagen 4 should use generate_images, NOT generate_content
+        mock_client.models.generate_images.assert_called_once()
+        mock_client.aio.models.generate_content.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_imagen4_failure(self, tmp_path):
+        """Test Imagen 4 failure when no images generated."""
+        mock_response = Mock()
+        mock_response.generated_images = []
+
+        mock_client = Mock()
+        mock_client.models.generate_images = Mock(return_value=mock_response)
+
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+        output_path = tmp_path / "out.png"
+
+        result = await client.generate(
+            prompt="test",
+            output_path=output_path,
+            model="imagen-4.0-generate-001",
+        )
+
+        assert result.success is False
+        assert result.error == "No images generated"

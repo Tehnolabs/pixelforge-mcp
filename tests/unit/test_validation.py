@@ -674,12 +674,25 @@ class TestConstants:
         assert "gemini-3-pro-image-preview" in COST_TABLE
         assert "gemini-3.1-flash-image-preview" in COST_TABLE
 
-    def test_cost_table_has_all_operations(self):
-        """Test each model has generate, edit, analyze costs."""
+    def test_cost_table_has_generate(self):
+        """Test all models have at least a generate cost."""
         for model_name, costs in COST_TABLE.items():
             assert "generate" in costs, f"{model_name} missing generate"
+
+    def test_gemini_models_have_all_operations(self):
+        """Test Gemini models have generate, edit, and analyze costs."""
+        gemini_models = [m for m in COST_TABLE if m.startswith("gemini-")]
+        for model_name in gemini_models:
+            costs = COST_TABLE[model_name]
             assert "edit" in costs, f"{model_name} missing edit"
             assert "analyze" in costs, f"{model_name} missing analyze"
+
+    def test_imagen4_models_generate_only(self):
+        """Test Imagen 4 models only have generate cost."""
+        imagen_models = [m for m in COST_TABLE if m.startswith("imagen-")]
+        assert len(imagen_models) >= 2
+        for model_name in imagen_models:
+            assert "generate" in COST_TABLE[model_name]
 
 
 # ------------------------------------------------------------------
