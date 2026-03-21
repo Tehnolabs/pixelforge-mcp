@@ -22,10 +22,9 @@ from pixelforge_mcp.server import (
 from pixelforge_mcp.utils.api_client import GenerationResult
 from pixelforge_mcp.utils.validation import COST_TABLE
 
-# FastMCP's @mcp.tool() wraps functions in FunctionTool objects.
-# Access the underlying async function via .fn for direct testing.
-estimate_cost_fn = _estimate_cost_tool.fn
-generate_image_fn = _generate_image_tool.fn
+# In FastMCP 3.x, @mcp.tool() returns the original function directly.
+estimate_cost_fn = _estimate_cost_tool
+generate_image_fn = _generate_image_tool
 
 
 # ------------------------------------------------------------------
