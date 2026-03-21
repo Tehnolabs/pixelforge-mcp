@@ -540,8 +540,79 @@ class TestConstants:
         assert PILLOW_FORMAT_MAP["jpeg"] == "JPEG"
         assert PILLOW_FORMAT_MAP["webp"] == "WEBP"
 
+    def test_text_model_constant(self):
+        """Test text model is defined."""
+        from pixelforge_mcp.utils.api_client import TEXT_MODEL
+
+        assert TEXT_MODEL == "gemini-2.5-flash"
+
     def test_safety_presets(self):
         """Test safety presets are defined."""
         assert "strict" in SAFETY_PRESETS
         assert "relaxed" in SAFETY_PRESETS
         assert "none" in SAFETY_PRESETS
+
+
+class TestJsonParsing:
+    """Tests for _parse_json_from_text helper."""
+
+    def test_parse_plain_json(self):
+        """Test parsing plain JSON."""
+        result = ImagenAPIClient._parse_json_from_text('{"text": "hello"}')
+        assert result == {"text": "hello"}
+
+    def test_parse_json_with_code_fence(self):
+        """Test parsing JSON wrapped in markdown code fences."""
+        text = '```json\n{"text": "hello"}\n```'
+        result = ImagenAPIClient._parse_json_from_text(text)
+        assert result == {"text": "hello"}
+
+    def test_parse_json_array(self):
+        """Test parsing JSON array."""
+        text = '[{"label": "cat", "box_2d": [10, 20, 30, 40]}]'
+        result = ImagenAPIClient._parse_json_from_text(text)
+        assert isinstance(result, list)
+        assert len(result) == 1
+
+    def test_parse_invalid_json(self):
+        """Test invalid JSON returns None."""
+        result = ImagenAPIClient._parse_json_from_text("not json at all")
+        assert result is None
+
+    def test_parse_empty_string(self):
+        """Test empty string returns None."""
+        result = ImagenAPIClient._parse_json_from_text("")
+        assert result is None
+
+
+class TestSDKRoutingExtended:
+    """Tests for extended SDK routing with reference_images."""
+
+    def test_needs_sdk_with_reference_images(self):
+        """Test routing to SDK when reference_images are set."""
+        assert (
+            ImagenAPIClient._needs_direct_sdk(reference_images=["/path/to/ref.png"])
+            is True
+        )
+
+    def test_needs_sdk_with_all_extended(self):
+        """Test routing when all extended params are set."""
+        assert (
+            ImagenAPIClient._needs_direct_sdk(
+                image_size="4K",
+                person_generation="allow",
+                reference_images=["/path/to/ref.png"],
+            )
+            is True
+        )
+
+    def test_no_sdk_without_extended(self):
+        """Test wrapper path for basic calls."""
+        assert (
+            ImagenAPIClient._needs_direct_sdk(
+                image_size=None,
+                person_generation=None,
+                reference_images=None,
+            )
+            is False
+        )

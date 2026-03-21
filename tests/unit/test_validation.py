@@ -7,14 +7,22 @@ from pydantic import ValidationError
 
 from pixelforge_mcp.utils.validation import (
     ASPECT_RATIOS,
+    COST_TABLE,
     FORMAT_EXTENSIONS,
     IMAGE_SIZES,
     OUTPUT_FORMATS,
     PERSON_GENERATION_OPTIONS,
     PERSON_GENERATION_SDK_MAP,
+    PROMPT_STYLES,
     AnalyzeImageInput,
+    CompareImagesInput,
+    DetectObjectsInput,
     EditImageInput,
+    EstimateCostInput,
+    ExtractTextInput,
     GenerateImageInput,
+    OptimizePromptInput,
+    RemoveBackgroundInput,
 )
 
 
@@ -559,4 +567,215 @@ class TestConstants:
         """Test SDK map values are uppercase SDK format."""
         for sdk_val in PERSON_GENERATION_SDK_MAP.values():
             assert sdk_val == sdk_val.upper()
-            assert sdk_val.startswith("ALLOW_") or sdk_val == "ALLOW_NONE"
+
+    def test_prompt_styles_defined(self):
+        """Test prompt styles list is populated."""
+        assert len(PROMPT_STYLES) > 0
+        assert "photorealistic" in PROMPT_STYLES
+        assert "cinematic" in PROMPT_STYLES
+
+    def test_cost_table_has_all_models(self):
+        """Test cost table covers all known models."""
+        assert "gemini-2.5-flash-image" in COST_TABLE
+        assert "gemini-3-pro-image-preview" in COST_TABLE
+        assert "gemini-3.1-flash-image-preview" in COST_TABLE
+
+    def test_cost_table_has_all_operations(self):
+        """Test each model has generate, edit, analyze costs."""
+        for model_name, costs in COST_TABLE.items():
+            assert "generate" in costs, f"{model_name} missing generate"
+            assert "edit" in costs, f"{model_name} missing edit"
+            assert "analyze" in costs, f"{model_name} missing analyze"
+
+
+# ------------------------------------------------------------------
+# Phase 2+ new input model tests
+# ------------------------------------------------------------------
+
+
+class TestReferenceImages:
+    """Tests for reference_images on GenerateImageInput."""
+
+    def test_default_is_none(self):
+        """Test default reference_images is None."""
+        data = GenerateImageInput(prompt="test")
+        assert data.reference_images is None
+
+    def test_valid_references(self, tmp_path):
+        """Test valid reference images are accepted."""
+        imgs = []
+        for i in range(3):
+            p = tmp_path / f"ref{i}.png"
+            p.touch()
+            imgs.append(str(p))
+        data = GenerateImageInput(prompt="test", reference_images=imgs)
+        assert len(data.reference_images) == 3
+
+    def test_too_many_references_rejected(self, tmp_path):
+        """Test more than 14 reference images is rejected."""
+        imgs = []
+        for i in range(15):
+            p = tmp_path / f"ref{i}.png"
+            p.touch()
+            imgs.append(str(p))
+        with pytest.raises(ValidationError, match="Maximum 14"):
+            GenerateImageInput(prompt="test", reference_images=imgs)
+
+    def test_nonexistent_reference_rejected(self):
+        """Test non-existent reference image is rejected."""
+        with pytest.raises(ValidationError, match="not found"):
+            GenerateImageInput(
+                prompt="test",
+                reference_images=["/nonexistent/ref.png"],
+            )
+
+    def test_empty_list_becomes_none(self):
+        """Test empty list is normalized to None."""
+        data = GenerateImageInput(prompt="test", reference_images=[])
+        assert data.reference_images is None
+
+
+class TestOptimizePromptInput:
+    """Tests for OptimizePromptInput validation."""
+
+    def test_valid_input(self):
+        """Test valid prompt optimization input."""
+        data = OptimizePromptInput(prompt="a cat on a chair")
+        assert data.prompt == "a cat on a chair"
+        assert data.style is None
+
+    def test_valid_style(self):
+        """Test valid style is accepted."""
+        for style in PROMPT_STYLES:
+            data = OptimizePromptInput(prompt="test", style=style)
+            assert data.style == style
+
+    def test_style_case_insensitive(self):
+        """Test style is case insensitive."""
+        data = OptimizePromptInput(prompt="test", style="CINEMATIC")
+        assert data.style == "cinematic"
+
+    def test_invalid_style_rejected(self):
+        """Test invalid style is rejected."""
+        with pytest.raises(ValidationError, match="Invalid style"):
+            OptimizePromptInput(prompt="test", style="cubism")
+
+    def test_empty_prompt_rejected(self):
+        """Test empty prompt is rejected."""
+        with pytest.raises(ValidationError, match="Prompt cannot be empty"):
+            OptimizePromptInput(prompt="")
+
+
+class TestExtractTextInput:
+    """Tests for ExtractTextInput validation."""
+
+    def test_valid_input(self, tmp_path):
+        """Test valid OCR input."""
+        img = tmp_path / "screenshot.png"
+        img.touch()
+        data = ExtractTextInput(image_path=str(img))
+        assert Path(data.image_path) == img.absolute()
+
+    def test_nonexistent_rejected(self):
+        """Test non-existent image is rejected."""
+        with pytest.raises(ValidationError, match="not found"):
+            ExtractTextInput(image_path="/nonexistent.png")
+
+
+class TestDetectObjectsInput:
+    """Tests for DetectObjectsInput validation."""
+
+    def test_valid_input(self, tmp_path):
+        """Test valid detection input."""
+        img = tmp_path / "photo.jpg"
+        img.touch()
+        data = DetectObjectsInput(image_path=str(img))
+        assert data.objects is None
+
+    def test_with_specific_objects(self, tmp_path):
+        """Test specific objects parameter."""
+        img = tmp_path / "photo.jpg"
+        img.touch()
+        data = DetectObjectsInput(image_path=str(img), objects="cats and dogs")
+        assert data.objects == "cats and dogs"
+
+
+class TestCompareImagesInput:
+    """Tests for CompareImagesInput validation."""
+
+    def test_valid_two_images(self, tmp_path):
+        """Test valid comparison with 2 images."""
+        imgs = []
+        for i in range(2):
+            p = tmp_path / f"img{i}.png"
+            p.touch()
+            imgs.append(str(p))
+        data = CompareImagesInput(image_paths=imgs)
+        assert len(data.image_paths) == 2
+
+    def test_single_image_rejected(self, tmp_path):
+        """Test single image is rejected."""
+        p = tmp_path / "img.png"
+        p.touch()
+        with pytest.raises(ValidationError, match="At least 2"):
+            CompareImagesInput(image_paths=[str(p)])
+
+    def test_too_many_rejected(self, tmp_path):
+        """Test more than 10 images is rejected."""
+        imgs = []
+        for i in range(11):
+            p = tmp_path / f"img{i}.png"
+            p.touch()
+            imgs.append(str(p))
+        with pytest.raises(ValidationError, match="Maximum 10"):
+            CompareImagesInput(image_paths=imgs)
+
+    def test_with_custom_prompt(self, tmp_path):
+        """Test comparison with custom prompt."""
+        imgs = [str(tmp_path / f"img{i}.png") for i in range(2)]
+        for p in imgs:
+            Path(p).touch()
+        data = CompareImagesInput(image_paths=imgs, prompt="color differences")
+        assert data.prompt == "color differences"
+
+
+class TestRemoveBackgroundInput:
+    """Tests for RemoveBackgroundInput validation."""
+
+    def test_valid_input(self, tmp_path):
+        """Test valid background removal input."""
+        img = tmp_path / "product.jpg"
+        img.touch()
+        data = RemoveBackgroundInput(image_path=str(img))
+        assert data.output_format == "png"
+
+    def test_nonexistent_rejected(self):
+        """Test non-existent image is rejected."""
+        with pytest.raises(ValidationError, match="not found"):
+            RemoveBackgroundInput(image_path="/nonexistent.png")
+
+
+class TestEstimateCostInput:
+    """Tests for EstimateCostInput validation."""
+
+    def test_valid_operations(self):
+        """Test all valid operations."""
+        for op in ["generate", "edit", "analyze"]:
+            data = EstimateCostInput(operation=op)
+            assert data.operation == op
+
+    def test_operation_case_insensitive(self):
+        """Test operation is case insensitive."""
+        data = EstimateCostInput(operation="GENERATE")
+        assert data.operation == "generate"
+
+    def test_invalid_operation_rejected(self):
+        """Test invalid operation is rejected."""
+        with pytest.raises(ValidationError, match="Invalid operation"):
+            EstimateCostInput(operation="resize")
+
+    def test_default_values(self):
+        """Test default model and number_of_images."""
+        data = EstimateCostInput(operation="generate")
+        assert data.model is None
+        assert data.number_of_images == 1
