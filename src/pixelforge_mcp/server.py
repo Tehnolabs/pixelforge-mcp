@@ -1,5 +1,6 @@
 """Main MCP server implementation for Gemini Imagen."""
 
+import asyncio
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -13,6 +14,7 @@ from .utils.api_client import GenerationResult, ImagenAPIClient
 from .utils.validation import (
     COST_TABLE,
     FORMAT_EXTENSIONS,
+    QUALITY_PRESETS,
     AnalyzeImageInput,
     CompareImagesInput,
     DetectObjectsInput,
@@ -116,6 +118,7 @@ async def generate_image(
     aspect_ratio: str = "1:1",
     temperature: float = 0.7,
     model: Optional[str] = None,
+    quality: Optional[str] = None,
     safety_setting: str = "preset:strict",
     image_size: Optional[str] = None,
     number_of_images: int = 1,
@@ -135,6 +138,9 @@ async def generate_image(
             - "gemini-2.5-flash-image" (default): Fast, cheap
             - "gemini-3-pro-image-preview": Best text, complex edits
             - "gemini-3.1-flash-image-preview": Panoramic, fast 4K
+        quality: Quality preset: "fast" (cheapest), "balanced"
+            (good quality), or "quality" (best output). Mutually
+            exclusive with 'model'.
         safety_setting: Safety filter (preset:strict, preset:relaxed)
         image_size: Resolution: "1K" (default), "2K", or "4K"
         number_of_images: Generate 1-4 variations (default: 1)
@@ -152,6 +158,11 @@ async def generate_image(
 
         generate_image(
             prompt="Product photo of a watch",
+            quality="quality"
+        )
+
+        generate_image(
+            prompt="Product photo of a watch",
             model="gemini-3.1-flash-image-preview",
             image_size="4K",
             output_format="webp"
@@ -166,6 +177,7 @@ async def generate_image(
             aspect_ratio=aspect_ratio,
             temperature=temperature,
             model=model,
+            quality=quality,
             safety_setting=safety_setting,
             image_size=image_size,
             number_of_images=number_of_images,
@@ -174,12 +186,20 @@ async def generate_image(
             reference_images=reference_images,
         )
 
+        # Resolve quality preset
+        if inputs.quality:
+            preset = QUALITY_PRESETS[inputs.quality]
+            resolved_model = preset["model"]
+            resolved_image_size = preset["image_size"] or inputs.image_size
+        else:
+            resolved_model = inputs.model
+            resolved_image_size = inputs.image_size
+
         client = get_api_client()
         n = inputs.number_of_images
         paths = []
-        errors = []
 
-        results: list = []
+        # Build all paths first
         for i in range(n):
             suffix = f"_{i + 1}" if n > 1 else ""
             if inputs.output_filename and n > 1:
@@ -197,22 +217,39 @@ async def generate_image(
             )
             paths.append(path)
 
-            result = await client.generate(
+        # Generate all images in parallel
+        async def _generate_one(path: Path) -> GenerationResult:
+            return await client.generate(
                 prompt=inputs.prompt,
                 output_path=path,
                 aspect_ratio=inputs.aspect_ratio,
                 temperature=inputs.temperature,
-                model=inputs.model,
+                model=resolved_model,
                 safety_setting=inputs.safety_setting,
-                image_size=inputs.image_size,
+                image_size=resolved_image_size,
                 person_generation=inputs.person_generation,
                 reference_images=inputs.reference_images,
                 output_format=inputs.output_format,
             )
-            results.append(result)
 
-            if not result.success:
-                errors.append(result.error or "Unknown error")
+        raw_results = await asyncio.gather(
+            *[_generate_one(p) for p in paths],
+            return_exceptions=True,
+        )
+
+        # Process results
+        errors: list[str] = []
+        results: list[GenerationResult] = []
+        for i, result in enumerate(raw_results):
+            if isinstance(result, Exception):
+                errors.append(str(result))
+                results.append(
+                    GenerationResult(success=False, output="", error=str(result))
+                )
+            else:
+                results.append(result)
+                if not result.success:
+                    errors.append(result.error or "Unknown error")
 
         # Aggregate: report success based on ALL results
         succeeded = [r for r in results if r.success]

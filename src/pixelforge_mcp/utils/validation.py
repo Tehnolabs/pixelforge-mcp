@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # Supported aspect ratios
 ASPECT_RATIOS = [
@@ -82,6 +82,22 @@ COST_TABLE = {
         "generate": 0.04,
         "edit": 0.04,
         "analyze": 0.01,
+    },
+}
+
+# Quality presets map to model + image_size combinations
+QUALITY_PRESETS = {
+    "fast": {
+        "model": "gemini-2.5-flash-image",
+        "image_size": None,
+    },
+    "balanced": {
+        "model": "gemini-3.1-flash-image-preview",
+        "image_size": "1K",
+    },
+    "quality": {
+        "model": "gemini-3-pro-image-preview",
+        "image_size": "2K",
     },
 }
 
@@ -167,6 +183,12 @@ class GenerateImageInput(BaseModel):
     )
     model: Optional[str] = Field(
         None, description="Model to use (default: gemini-2.5-flash-image)"
+    )
+    quality: Optional[str] = Field(
+        None,
+        description="Quality preset: 'fast' (cheapest, fastest), "
+        "'balanced' (good quality, fast), or 'quality' (best output). "
+        "Mutually exclusive with 'model'.",
     )
     safety_setting: str = Field(
         "preset:strict",
@@ -259,6 +281,27 @@ class GenerateImageInput(BaseModel):
         if len(v) == 0:
             return None
         return [_validate_image_path(p) for p in v]
+
+    @field_validator("quality")
+    @classmethod
+    def validate_quality(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.lower()
+        if v not in QUALITY_PRESETS:
+            raise ValueError(
+                f"Invalid quality preset. "
+                f"Must be one of: {', '.join(QUALITY_PRESETS)}"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def check_quality_model_exclusive(self):
+        if self.quality and self.model:
+            raise ValueError(
+                "'quality' and 'model' are mutually " "exclusive. Use one or the other."
+            )
+        return self
 
 
 class EditImageInput(BaseModel):

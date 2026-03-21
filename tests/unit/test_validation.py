@@ -14,6 +14,7 @@ from pixelforge_mcp.utils.validation import (
     PERSON_GENERATION_OPTIONS,
     PERSON_GENERATION_SDK_MAP,
     PROMPT_STYLES,
+    QUALITY_PRESETS,
     AnalyzeImageInput,
     CompareImagesInput,
     DetectObjectsInput,
@@ -294,6 +295,51 @@ class TestGenerateAllNewParams:
         assert input_data.number_of_images == 3
         assert input_data.output_format == "webp"
         assert input_data.person_generation == "allow"
+
+
+class TestQualityPresets:
+    """Tests for quality preset validation."""
+
+    def test_quality_preset_valid(self):
+        """Test quality='fast' is accepted."""
+        data = GenerateImageInput(prompt="test", quality="fast")
+        assert data.quality == "fast"
+
+    def test_quality_preset_all_valid(self):
+        """Test all valid quality presets are accepted."""
+        for preset in QUALITY_PRESETS:
+            data = GenerateImageInput(prompt="test", quality=preset)
+            assert data.quality == preset
+
+    def test_quality_preset_case_insensitive(self):
+        """Test quality is case insensitive."""
+        data = GenerateImageInput(prompt="test", quality="BALANCED")
+        assert data.quality == "balanced"
+
+    def test_quality_preset_invalid(self):
+        """Test quality='ultra' is rejected."""
+        with pytest.raises(ValidationError, match="Invalid quality preset"):
+            GenerateImageInput(prompt="test", quality="ultra")
+
+    def test_quality_and_model_exclusive(self):
+        """Test both quality and model set raises ValidationError."""
+        with pytest.raises(ValidationError, match="mutually exclusive"):
+            GenerateImageInput(
+                prompt="test",
+                quality="fast",
+                model="gemini-2.5-flash-image",
+            )
+
+    def test_quality_without_model_ok(self):
+        """Test quality alone works fine without model."""
+        data = GenerateImageInput(prompt="test", quality="quality")
+        assert data.quality == "quality"
+        assert data.model is None
+
+    def test_quality_default_is_none(self):
+        """Test default quality is None."""
+        data = GenerateImageInput(prompt="test")
+        assert data.quality is None
 
 
 class TestEditImageInput:
