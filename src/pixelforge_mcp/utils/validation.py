@@ -230,6 +230,13 @@ class GenerateImageInput(BaseModel):
         "consistency. Up to 14 images. Gemini 3.1 Flash supports "
         "10 object + 4 character references.",
     )
+    thinking_budget: Optional[int] = Field(
+        None,
+        description="Thinking budget for extended reasoning (0-24576 tokens). "
+        "Higher values = deeper reasoning. Only for Gemini models.",
+        ge=0,
+        le=24576,
+    )
 
     @field_validator("prompt")
     @classmethod
@@ -368,6 +375,11 @@ class AnalyzeImageInput(BaseModel):
         None,
         description="Custom analysis prompt (default: general description)",
     )
+    use_grounding: bool = Field(
+        False,
+        description="Enable Google Search grounding for more accurate, "
+        "factual analysis results",
+    )
 
     @field_validator("prompt")
     @classmethod
@@ -384,6 +396,11 @@ class ExtractTextInput(BaseModel):
     """Input validation for OCR / text extraction."""
 
     image_path: str = Field(..., description="Path to the image to extract text from")
+    use_grounding: bool = Field(
+        False,
+        description="Enable Google Search grounding for more accurate, "
+        "factual analysis results",
+    )
 
     @field_validator("image_path")
     @classmethod
@@ -399,6 +416,11 @@ class DetectObjectsInput(BaseModel):
         None,
         description="Specific objects to detect (e.g. 'cats and dogs'). "
         "If not provided, detects all visible objects.",
+    )
+    use_grounding: bool = Field(
+        False,
+        description="Enable Google Search grounding for more accurate, "
+        "factual analysis results",
     )
 
     @field_validator("image_path")
@@ -417,6 +439,11 @@ class CompareImagesInput(BaseModel):
         None,
         description="Comparison focus (e.g. 'color differences', "
         "'layout changes'). Default: general comparison.",
+    )
+    use_grounding: bool = Field(
+        False,
+        description="Enable Google Search grounding for more accurate, "
+        "factual analysis results",
     )
 
     @field_validator("prompt")
@@ -637,3 +664,98 @@ class ApplyTemplateInput(BaseModel):
         if len(v) > 500:
             raise ValueError("Subject too long (max 500 characters)")
         return v
+
+
+# ---------------------------------------------------------------------------
+# Vertex AI tools (optional, requires google-cloud-aiplatform)
+# ---------------------------------------------------------------------------
+
+
+class UpscaleImageInput(BaseModel):
+    """Input validation for image upscaling (Vertex AI only)."""
+
+    image_path: str = Field(..., description="Path to the image to upscale")
+    upscale_factor: str = Field("x2", description="Upscale factor: 'x2' or 'x4'")
+    output_filename: Optional[str] = Field(None, description="Custom output filename")
+    output_format: str = Field("png", description="Output format")
+
+    @field_validator("image_path")
+    @classmethod
+    def validate_image_path(cls, v: str) -> str:
+        return _validate_image_path(v)
+
+    @field_validator("upscale_factor")
+    @classmethod
+    def validate_upscale_factor(cls, v: str) -> str:
+        v = v.lower()
+        if v not in ("x2", "x4"):
+            raise ValueError("Upscale factor must be 'x2' or 'x4'")
+        return v
+
+    @field_validator("output_filename")
+    @classmethod
+    def validate_filename(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_output_filename(v)
+
+    @field_validator("output_format")
+    @classmethod
+    def validate_output_format(cls, v: str) -> str:
+        return _validate_output_format(v)
+
+
+ADVANCED_EDIT_MODES = [
+    "inpaint_removal",
+    "inpaint_insertion",
+    "outpaint",
+    "background_swap",
+    "style_transfer",
+    "product_image",
+]
+
+
+class AdvancedEditInput(BaseModel):
+    """Input validation for advanced editing (Vertex AI only)."""
+
+    image_path: str = Field(..., description="Path to the image to edit")
+    prompt: str = Field(..., description="Edit instruction")
+    edit_mode: str = Field(
+        ...,
+        description="Edit mode: inpaint_removal, inpaint_insertion, "
+        "outpaint, background_swap, style_transfer, product_image",
+    )
+    mask_path: Optional[str] = Field(
+        None, description="Path to mask image (for inpainting)"
+    )
+    output_filename: Optional[str] = Field(None, description="Custom output filename")
+    output_format: str = Field("png", description="Output format")
+
+    @field_validator("image_path")
+    @classmethod
+    def validate_image_path(cls, v: str) -> str:
+        return _validate_image_path(v)
+
+    @field_validator("prompt")
+    @classmethod
+    def validate_prompt(cls, v: str) -> str:
+        return _validate_prompt_text(v)
+
+    @field_validator("edit_mode")
+    @classmethod
+    def validate_edit_mode(cls, v: str) -> str:
+        v = v.lower()
+        if v not in ADVANCED_EDIT_MODES:
+            raise ValueError(
+                f"Invalid edit mode. "
+                f"Must be one of: {', '.join(ADVANCED_EDIT_MODES)}"
+            )
+        return v
+
+    @field_validator("output_filename")
+    @classmethod
+    def validate_filename(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_output_filename(v)
+
+    @field_validator("output_format")
+    @classmethod
+    def validate_output_format(cls, v: str) -> str:
+        return _validate_output_format(v)
