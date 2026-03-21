@@ -144,19 +144,6 @@ class ImagenAPIClient:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _needs_direct_sdk(
-        image_size: Optional[str] = None,
-        person_generation: Optional[str] = None,
-        reference_images: Optional[List[str]] = None,
-    ) -> bool:
-        """Check if the call requires direct SDK."""
-        return (
-            image_size is not None
-            or person_generation is not None
-            or reference_images is not None
-        )
-
-    @staticmethod
     def _build_safety_settings(
         safety_setting: Optional[str],
     ) -> Optional[list]:
@@ -399,61 +386,20 @@ class ImagenAPIClient:
     ) -> GenerationResult:
         """Generate an image from a text prompt.
 
-        Routes to direct SDK when extended params are specified.
-        Falls back to gemini-imagen wrapper for basic calls.
+        Uses google-genai SDK directly for full ImageConfig control.
         """
-        if self._needs_direct_sdk(image_size, person_generation, reference_images):
-            return await self._generate_via_sdk(
-                prompt=prompt,
-                output_path=output_path,
-                model=model or self.model_name,
-                aspect_ratio=aspect_ratio,
-                temperature=temperature,
-                safety_setting=safety_setting,
-                image_size=image_size,
-                person_generation=person_generation,
-                reference_images=reference_images,
-                output_format=output_format,
-            )
-
-        try:
-            generator = self._get_generator()
-            if model:
-                generator.model_name = model
-
-            result = await generator.generate(
-                prompt=prompt,
-                output_images=[str(output_path)],
-                aspect_ratio=aspect_ratio,
-                temperature=temperature,
-            )
-
-            if result.images:
-                if output_format != "png" and output_path.exists():
-                    img = Image.open(str(output_path))
-                    self._save_image(img, output_path, output_format)
-
-                return GenerationResult(
-                    success=True,
-                    output=(f"Image generated successfully at {output_path}"),
-                    images=result.images,
-                    image_paths=[str(output_path)],
-                    data={
-                        "model": model or self.model_name,
-                        "aspect_ratio": aspect_ratio,
-                        "temperature": temperature,
-                    },
-                )
-            else:
-                return GenerationResult(
-                    success=False,
-                    output="",
-                    error="No images generated",
-                )
-
-        except Exception as e:
-            logger.error(f"Image generation failed: {e}", exc_info=True)
-            return GenerationResult(success=False, output="", error=str(e))
+        return await self._generate_via_sdk(
+            prompt=prompt,
+            output_path=output_path,
+            model=model or self.model_name,
+            aspect_ratio=aspect_ratio,
+            temperature=temperature,
+            safety_setting=safety_setting,
+            image_size=image_size,
+            person_generation=person_generation,
+            reference_images=reference_images,
+            output_format=output_format,
+        )
 
     async def edit(
         self,

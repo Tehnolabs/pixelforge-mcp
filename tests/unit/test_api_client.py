@@ -64,16 +64,26 @@ class TestImagenAPIClient:
         assert client.log_images is True
 
     @pytest.mark.asyncio
-    @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
-    async def test_generate_success(self, mock_generator_class, tmp_path):
-        """Test successful image generation."""
-        mock_generator = Mock()
-        mock_result = Mock()
-        mock_result.images = [Mock(spec=Image.Image)]
-        mock_generator.generate = AsyncMock(return_value=mock_result)
-        mock_generator_class.return_value = mock_generator
+    async def test_generate_success(self, tmp_path):
+        """Test successful image generation via direct SDK."""
+        # Create a real small PNG in memory
+        test_img = Image.new("RGB", (10, 10), color="red")
+        buf = __import__("io").BytesIO()
+        test_img.save(buf, format="PNG")
+        img_bytes = buf.getvalue()
 
-        client = ImagenAPIClient()
+        # Mock the genai client response
+        mock_part = Mock()
+        mock_part.inline_data = Mock(data=img_bytes)
+        mock_candidate = Mock()
+        mock_candidate.content.parts = [mock_part]
+        mock_response = Mock(candidates=[mock_candidate])
+
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
         output_path = tmp_path / "test.png"
 
         result = await client.generate(
@@ -85,31 +95,24 @@ class TestImagenAPIClient:
         )
 
         assert result.success is True
-        assert result.images == mock_result.images
+        assert len(result.images) == 1
         assert result.image_paths == [str(output_path)]
         assert result.data["model"] == "gemini-2.5-flash-image"
         assert result.data["aspect_ratio"] == "16:9"
-        assert result.data["temperature"] == 0.8
-
-        # Verify generate was called with correct args
-        mock_generator.generate.assert_called_once()
-        call_kwargs = mock_generator.generate.call_args[1]
-        assert call_kwargs["prompt"] == "test prompt"
-        assert call_kwargs["output_images"] == [str(output_path)]
-        assert call_kwargs["aspect_ratio"] == "16:9"
-        assert call_kwargs["temperature"] == 0.8
+        assert output_path.exists()
 
     @pytest.mark.asyncio
-    @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
-    async def test_generate_failure_no_images(self, mock_generator_class, tmp_path):
-        """Test generation failure when no images are returned."""
-        mock_generator = Mock()
-        mock_result = Mock()
-        mock_result.images = None
-        mock_generator.generate = AsyncMock(return_value=mock_result)
-        mock_generator_class.return_value = mock_generator
+    async def test_generate_failure_no_images(self, tmp_path):
+        """Test generation failure when no images in response."""
+        mock_candidate = Mock()
+        mock_candidate.content.parts = []
+        mock_response = Mock(candidates=[mock_candidate])
 
-        client = ImagenAPIClient()
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
         output_path = tmp_path / "test.png"
 
         result = await client.generate(prompt="test", output_path=output_path)
@@ -118,14 +121,15 @@ class TestImagenAPIClient:
         assert result.error == "No images generated"
 
     @pytest.mark.asyncio
-    @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
-    async def test_generate_exception(self, mock_generator_class, tmp_path):
+    async def test_generate_exception(self, tmp_path):
         """Test generation with exception."""
-        mock_generator = Mock()
-        mock_generator.generate = AsyncMock(side_effect=Exception("API error"))
-        mock_generator_class.return_value = mock_generator
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(
+            side_effect=Exception("API error")
+        )
 
-        client = ImagenAPIClient()
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
         output_path = tmp_path / "test.png"
 
         result = await client.generate(prompt="test", output_path=output_path)
@@ -335,56 +339,33 @@ class TestImagenAPIClient:
         assert mock_generator_class.call_count == 1
 
     @pytest.mark.asyncio
-    @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
-    async def test_model_override(self, mock_generator_class, tmp_path):
-        """Test model override in generate call."""
-        mock_generator = Mock()
-        mock_result = Mock()
-        mock_result.images = [Mock(spec=Image.Image)]
-        mock_generator.generate = AsyncMock(return_value=mock_result)
-        mock_generator.model_name = "gemini-2.5-flash-image"
-        mock_generator_class.return_value = mock_generator
+    async def test_generate_model_override(self, tmp_path):
+        """Test model override is passed to SDK call."""
+        test_img = Image.new("RGB", (10, 10), color="red")
+        buf = __import__("io").BytesIO()
+        test_img.save(buf, format="PNG")
 
-        client = ImagenAPIClient(model_name="gemini-2.5-flash-image")
-        output_path = tmp_path / "test.png"
+        mock_part = Mock()
+        mock_part.inline_data = Mock(data=buf.getvalue())
+        mock_candidate = Mock()
+        mock_candidate.content.parts = [mock_part]
+        mock_response = Mock(candidates=[mock_candidate])
+
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
 
         await client.generate(
             prompt="test",
-            output_path=output_path,
+            output_path=tmp_path / "test.png",
             model="gemini-3-pro-image-preview",
         )
 
-        assert mock_generator.model_name == "gemini-3-pro-image-preview"
-
-
-class TestSDKRouting:
-    """Tests for direct SDK routing logic."""
-
-    def test_needs_direct_sdk_with_image_size(self):
-        """Test routing to SDK when image_size is set."""
-        assert ImagenAPIClient._needs_direct_sdk(image_size="4K") is True
-
-    def test_needs_direct_sdk_with_person_generation(self):
-        """Test routing to SDK when person_generation is set."""
-        assert ImagenAPIClient._needs_direct_sdk(person_generation="allow") is True
-
-    def test_needs_direct_sdk_with_both(self):
-        """Test routing to SDK when both extended params are set."""
-        assert (
-            ImagenAPIClient._needs_direct_sdk(
-                image_size="2K", person_generation="block"
-            )
-            is True
-        )
-
-    def test_no_sdk_needed_for_basic_call(self):
-        """Test wrapper path used for basic calls."""
-        assert ImagenAPIClient._needs_direct_sdk() is False
-        assert ImagenAPIClient._needs_direct_sdk(image_size=None) is False
-        assert (
-            ImagenAPIClient._needs_direct_sdk(image_size=None, person_generation=None)
-            is False
-        )
+        # Verify the model was passed to the SDK call
+        call_kwargs = mock_client.aio.models.generate_content.call_args[1]
+        assert call_kwargs["model"] == "gemini-3-pro-image-preview"
 
 
 class TestSafetySettings:
@@ -585,34 +566,33 @@ class TestJsonParsing:
         assert result is None
 
 
-class TestSDKRoutingExtended:
-    """Tests for extended SDK routing with reference_images."""
+class TestGenerateAlwaysUsesSDK:
+    """Tests verifying generate always routes through direct SDK."""
 
-    def test_needs_sdk_with_reference_images(self):
-        """Test routing to SDK when reference_images are set."""
-        assert (
-            ImagenAPIClient._needs_direct_sdk(reference_images=["/path/to/ref.png"])
-            is True
+    @pytest.mark.asyncio
+    async def test_generate_uses_sdk_even_without_extended_params(self, tmp_path):
+        """Test basic generate call goes through SDK (no dual path)."""
+        test_img = Image.new("RGB", (10, 10), color="blue")
+        buf = __import__("io").BytesIO()
+        test_img.save(buf, format="PNG")
+
+        mock_part = Mock()
+        mock_part.inline_data = Mock(data=buf.getvalue())
+        mock_candidate = Mock()
+        mock_candidate.content.parts = [mock_part]
+        mock_response = Mock(candidates=[mock_candidate])
+
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
+        result = await client.generate(
+            prompt="simple test",
+            output_path=tmp_path / "out.png",
         )
 
-    def test_needs_sdk_with_all_extended(self):
-        """Test routing when all extended params are set."""
-        assert (
-            ImagenAPIClient._needs_direct_sdk(
-                image_size="4K",
-                person_generation="allow",
-                reference_images=["/path/to/ref.png"],
-            )
-            is True
-        )
-
-    def test_no_sdk_without_extended(self):
-        """Test wrapper path for basic calls."""
-        assert (
-            ImagenAPIClient._needs_direct_sdk(
-                image_size=None,
-                person_generation=None,
-                reference_images=None,
-            )
-            is False
-        )
+        assert result.success is True
+        # Verify SDK was called (not gemini-imagen)
+        mock_client.aio.models.generate_content.assert_called_once()

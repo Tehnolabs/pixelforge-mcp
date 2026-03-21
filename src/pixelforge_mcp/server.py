@@ -70,23 +70,34 @@ def generate_output_path(
     return output_dir / f"{prefix}_{timestamp}{ext}"
 
 
-def format_api_result(
+def format_image_result(
     result: GenerationResult,
-    image_path: Optional[Path] = None,
+    output_paths: list[Path],
 ) -> dict:
-    """Format API result for MCP response."""
-    response = {
-        "success": result.success,
-        "message": result.output if result.success else result.error,
+    """Format image generation/edit result for MCP response."""
+    if not result.success:
+        return {
+            "success": False,
+            "message": result.error or "Operation failed",
+        }
+
+    images = []
+    for p in output_paths:
+        if p.exists():
+            images.append(
+                {
+                    "path": str(p.absolute()),
+                    "size_bytes": p.stat().st_size,
+                }
+            )
+
+    response: dict = {
+        "success": True,
+        "message": result.output,
+        "images": images,
     }
-
-    if result.success and image_path and image_path.exists():
-        response["image_path"] = str(image_path.absolute())
-        response["image_size_bytes"] = image_path.stat().st_size
-
     if result.data:
         response["details"] = result.data
-
     return response
 
 
@@ -161,56 +172,30 @@ async def generate_image(
         )
 
         client = get_api_client()
-
-        # Single image (most common path)
-        if inputs.number_of_images == 1:
-            output_path = generate_output_path(
-                filename=inputs.output_filename,
-                prefix="generated",
-                output_format=inputs.output_format,
-            )
-
-            result = await client.generate(
-                prompt=inputs.prompt,
-                output_path=output_path,
-                aspect_ratio=inputs.aspect_ratio,
-                temperature=inputs.temperature,
-                model=inputs.model,
-                safety_setting=inputs.safety_setting,
-                image_size=inputs.image_size,
-                person_generation=inputs.person_generation,
-                reference_images=inputs.reference_images,
-                output_format=inputs.output_format,
-            )
-
-            response = format_api_result(
-                result, output_path if result.success else None
-            )
-            if result.success:
-                logger.info(f"Image generated: {output_path}")
-            else:
-                logger.error(f"Generation failed: {result.error}")
-            return response
-
-        # Multiple images
-        generated = []
+        n = inputs.number_of_images
+        paths = []
         errors = []
-        for i in range(inputs.number_of_images):
-            suffix = f"_{i + 1}"
-            if inputs.output_filename:
+
+        for i in range(n):
+            suffix = f"_{i + 1}" if n > 1 else ""
+            if inputs.output_filename and n > 1:
                 base, ext = inputs.output_filename.rsplit(".", 1)
-                numbered_name = f"{base}{suffix}.{ext}"
+                name = f"{base}{suffix}.{ext}"
+            elif inputs.output_filename:
+                name = inputs.output_filename
             else:
-                numbered_name = None
-            output_path = generate_output_path(
-                filename=numbered_name,
+                name = None
+
+            path = generate_output_path(
+                filename=name,
                 prefix=f"generated{suffix}",
                 output_format=inputs.output_format,
             )
+            paths.append(path)
 
             result = await client.generate(
                 prompt=inputs.prompt,
-                output_path=output_path,
+                output_path=path,
                 aspect_ratio=inputs.aspect_ratio,
                 temperature=inputs.temperature,
                 model=inputs.model,
@@ -221,44 +206,13 @@ async def generate_image(
                 output_format=inputs.output_format,
             )
 
-            if result.success and output_path.exists():
-                generated.append(
-                    {
-                        "image_path": str(output_path.absolute()),
-                        "image_size_bytes": output_path.stat().st_size,
-                    }
-                )
-            else:
+            if not result.success:
                 errors.append(result.error or "Unknown error")
 
-        if generated:
-            response = {
-                "success": True,
-                "message": (
-                    f"Generated {len(generated)} of "
-                    f"{inputs.number_of_images} images"
-                ),
-                "image_path": generated[0]["image_path"],
-                "image_size_bytes": generated[0]["image_size_bytes"],
-                "images": generated,
-                "details": {
-                    "model": inputs.model,
-                    "aspect_ratio": inputs.aspect_ratio,
-                    "temperature": inputs.temperature,
-                    "image_size": inputs.image_size,
-                    "count": len(generated),
-                },
-            }
-            if errors:
-                response["errors"] = errors
-            logger.info(f"Generated {len(generated)} images")
-            return response
-        else:
-            return {
-                "success": False,
-                "message": (f"All {inputs.number_of_images} " f"generations failed"),
-                "errors": errors,
-            }
+        response = format_image_result(result, paths)
+        if errors and n > 1:
+            response["errors"] = errors
+        return response
 
     except ValidationError as e:
         logger.error(f"Validation error: {e}")
@@ -329,7 +283,7 @@ async def edit_image(
             output_format=inputs.output_format,
         )
 
-        response = format_api_result(result, output_path if result.success else None)
+        response = format_image_result(result, [output_path])
         if result.success:
             logger.info(f"Image edited: {output_path}")
         else:
@@ -392,7 +346,7 @@ async def remove_background(
             output_format=inputs.output_format,
         )
 
-        return format_api_result(result, output_path if result.success else None)
+        return format_image_result(result, [output_path])
 
     except ValidationError as e:
         return {"success": False, "message": f"Invalid input: {e}"}
