@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 
 # Initialize FastMCP server
-mcp = FastMCP("gemini-imagen-mcp")
+mcp = FastMCP("pixelforge-mcp")
 
 
 # Initialize API client (will be set on first use)

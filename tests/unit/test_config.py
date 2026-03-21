@@ -74,7 +74,7 @@ class TestServerConfig:
     def test_default_values(self):
         """Test ServerConfig uses correct defaults."""
         config = ServerConfig()
-        assert config.name == "gemini-imagen-mcp"
+        assert config.name == "pixelforge-mcp"
         assert config.version == "0.5.0"
         assert config.log_level == "INFO"
 
@@ -96,7 +96,7 @@ class TestConfig:
 
         config = Config.load(config_file)
         assert isinstance(config, Config)
-        assert config.server.name == "gemini-imagen-mcp"
+        assert config.server.name == "pixelforge-mcp"
 
     def test_load_from_yaml_file(self, tmp_path, monkeypatch):
         """Test loading config from YAML file."""
@@ -147,7 +147,7 @@ class TestConfig:
         config_file = tmp_path / "nonexistent.yaml"
         config = Config.load(config_file)
         assert isinstance(config, Config)
-        assert config.server.name == "gemini-imagen-mcp"
+        assert config.server.name == "pixelforge-mcp"
 
     def test_save_config(self, tmp_path, monkeypatch):
         """Test saving config to file."""

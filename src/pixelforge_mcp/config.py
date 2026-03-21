@@ -63,7 +63,7 @@ class StorageConfig(BaseModel):
 class ServerConfig(BaseModel):
     """MCP server configuration."""
 
-    name: str = Field("gemini-imagen-mcp", description="Server name")
+    name: str = Field("pixelforge-mcp", description="Server name")
     version: str = Field("0.5.0", description="Server version")
     log_level: str = Field("INFO", description="Logging level")
 

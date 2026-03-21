@@ -50,13 +50,17 @@ pytest tests/integration/ -v
 ```
 pixelforge-mcp/
 ├── src/pixelforge_mcp/
-│   ├── config.py         # Pydantic-based configuration
-│   ├── server.py         # FastMCP server with 5 async tools
+│   ├── config.py         # Pydantic config, VertexConfig
+│   ├── server.py         # FastMCP server with 21 async tools
+│   ├── templates/        # Prompt template YAML files
 │   └── utils/
-│       ├── api_client.py # API client using gemini-imagen library
+│       ├── api_client.py # Direct google-genai SDK client
+│       ├── history.py    # Generation history tracking
+│       ├── templates.py  # Template library
+│       ├── transforms.py # Image transforms (crop, resize, etc.)
 │       └── validation.py # Input validation with Pydantic
 ├── tests/
-│   └── unit/             # Unit tests
+│   └── unit/             # 237 unit tests
 ├── config/               # Configuration examples
 └── docs/                 # Documentation
 ```
