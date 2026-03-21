@@ -57,9 +57,6 @@ class TestStorageConfig:
         """Test StorageConfig uses correct defaults."""
         config = StorageConfig()
         assert config.output_dir == Path("./generated_images")
-        assert config.use_s3 is False
-        assert config.s3_bucket is None
-        assert config.s3_prefix == ""
 
     def test_output_dir_creation(self, tmp_path):
         """Test output directory is created if it doesn't exist."""
@@ -78,7 +75,7 @@ class TestServerConfig:
         """Test ServerConfig uses correct defaults."""
         config = ServerConfig()
         assert config.name == "gemini-imagen-mcp"
-        assert config.version == "0.2.0"
+        assert config.version == "0.3.1"
         assert config.log_level == "INFO"
 
 
@@ -101,8 +98,12 @@ class TestConfig:
         assert isinstance(config, Config)
         assert config.server.name == "gemini-imagen-mcp"
 
-    def test_load_from_yaml_file(self, tmp_path):
+    def test_load_from_yaml_file(self, tmp_path, monkeypatch):
         """Test loading config from YAML file."""
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        monkeypatch.delenv("GOOGLE_GENERATIVE_AI_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
         config_file = tmp_path / "config.yaml"
         config_data = {
             "imagen": {
@@ -112,8 +113,6 @@ class TestConfig:
             },
             "storage": {
                 "output_dir": str(tmp_path / "images"),
-                "use_s3": True,
-                "s3_bucket": "test-bucket",
             },
             "server": {
                 "log_level": "DEBUG",
@@ -125,8 +124,6 @@ class TestConfig:
         assert config.imagen.api_key == "test-key"
         assert config.imagen.default_model == "custom-model"
         assert config.imagen.default_temperature == 0.9
-        assert config.storage.use_s3 is True
-        assert config.storage.s3_bucket == "test-bucket"
         assert config.server.log_level == "DEBUG"
 
     def test_load_with_env_override(self, tmp_path, monkeypatch):
@@ -152,8 +149,12 @@ class TestConfig:
         assert isinstance(config, Config)
         assert config.server.name == "gemini-imagen-mcp"
 
-    def test_save_config(self, tmp_path):
+    def test_save_config(self, tmp_path, monkeypatch):
         """Test saving config to file."""
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        monkeypatch.delenv("GOOGLE_GENERATIVE_AI_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
         config_file = tmp_path / "config.yaml"
 
         config = Config(

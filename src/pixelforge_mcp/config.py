@@ -5,13 +5,30 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator
+
+
+class MaskedStr(SecretStr):
+    """A string that masks its value in repr/str.
+
+    Supports equality comparison with plain strings.
+    """
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, SecretStr):
+            return self.get_secret_value() == other.get_secret_value()
+        if isinstance(other, str):
+            return self.get_secret_value() == other
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash(self.get_secret_value())
 
 
 class ImagenConfig(BaseModel):
     """Gemini Imagen CLI configuration."""
 
-    api_key: Optional[str] = Field(None, description="Google API key")
+    api_key: Optional[MaskedStr] = Field(None, description="Google API key")
     default_model: str = Field(
         "gemini-2.5-flash-image", description="Default image generation model"
     )
@@ -34,9 +51,6 @@ class StorageConfig(BaseModel):
     output_dir: Path = Field(
         Path("./generated_images"), description="Directory for generated images"
     )
-    use_s3: bool = Field(False, description="Enable S3 storage")
-    s3_bucket: Optional[str] = Field(None, description="S3 bucket name")
-    s3_prefix: str = Field("", description="S3 key prefix")
 
     @field_validator("output_dir")
     @classmethod
@@ -50,7 +64,7 @@ class ServerConfig(BaseModel):
     """MCP server configuration."""
 
     name: str = Field("gemini-imagen-mcp", description="Server name")
-    version: str = Field("0.3.0", description="Server version")
+    version: str = Field("0.3.1", description="Server version")
     log_level: str = Field("INFO", description="Logging level")
 
 
@@ -95,6 +109,12 @@ class Config(BaseModel):
 
         # Convert to dict with proper serialization
         data = self.model_dump()
+        # Serialize API key as plaintext for YAML (SecretStr serializes as '**********')
+        if "imagen" in data:
+            if self.imagen.api_key is not None:
+                data["imagen"]["api_key"] = self.imagen.api_key.get_secret_value()
+            else:
+                data["imagen"].pop("api_key", None)
         # Convert Path objects to strings
         if "storage" in data and "output_dir" in data["storage"]:
             data["storage"]["output_dir"] = str(data["storage"]["output_dir"])
