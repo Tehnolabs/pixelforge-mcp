@@ -1,6 +1,6 @@
 # PixelForge MCP - Development Guide
 
-MCP server for AI-powered image generation, editing, and analysis using Google's Gemini models.
+MCP server for AI-powered image generation, editing, analysis, and transformation using Google's Gemini and Imagen 4 models.
 
 ## Prerequisites
 
@@ -93,21 +93,61 @@ Any of these environment variables will work:
 | `GOOGLE_GENERATIVE_AI_API_KEY` | Alternative |
 | `GEMINI_API_KEY` | Alternative |
 
-## Available Tools
+## Available Tools (21)
 
+### Generation
 | Tool | Description |
 |------|-------------|
-| `generate_image` | Generate images from text (model switching, 14 aspect ratios, temperature control) |
+| `generate_image` | Generate images from text (6 models, quality presets, parallel multi-image, thinking mode) |
 | `edit_image` | Modify existing images with text prompts |
-| `analyze_image` | Get AI-powered image descriptions (supports custom analysis prompts) |
+| `remove_background` | Remove image background |
+| `transform_image` | Crop, resize, rotate, flip, blur, sharpen, grayscale, watermark |
+| `batch_generate` | Generate up to 10 images in parallel |
+
+### Analysis
+| Tool | Description |
+|------|-------------|
+| `analyze_image` | AI-powered image descriptions (with optional grounding) |
+| `extract_text` | OCR — extract text with confidence levels |
+| `detect_objects` | Detect objects with bounding boxes |
+| `compare_images` | Compare 2-10 images |
+
+### Utility
+| Tool | Description |
+|------|-------------|
+| `optimize_prompt` | Enhance prompts for better generation (14 styles) |
+| `estimate_cost` | Calculate costs per model/operation |
+| `list_templates` | Browse 24 curated prompt templates |
+| `apply_template` | Fill template with subject for ready-to-use prompt |
 | `list_available_models` | Model capabilities and selection guidance |
 | `get_server_info` | Server configuration and status |
 
+### History
+| Tool | Description |
+|------|-------------|
+| `list_history` | Browse generation history with filtering |
+| `get_generation_details` | Get details of a specific generation |
+
+### Vertex AI (Optional)
+| Tool | Description |
+|------|-------------|
+| `upscale_image` | Upscale images x2 or x4 (requires Vertex AI) |
+| `advanced_edit` | Inpainting, outpainting, background swap, style transfer (requires Vertex AI) |
+
 ## Model Selection
 
+### Gemini Models
 - **Fast iterations:** `gemini-2.5-flash-image` (default) — cheapest, lowest latency
 - **Panoramic/grounded:** `gemini-3.1-flash-image-preview` — panoramic ratios, web+image grounding, fast 4K
 - **Max text fidelity:** `gemini-3-pro-image-preview` — ~94% text accuracy, complex multi-turn edits
+
+### Imagen 4 Models
+- **Cost-effective:** `imagen-4.0-generate-001` — $0.04/img, excellent quality
+- **Cheapest:** `imagen-4.0-fast-generate-001` — $0.02/img, fastest
+- **Maximum quality:** `imagen-4.0-ultra-generate-001` — $0.06/img
+
+### Quality Presets
+Use `quality="fast"`, `"balanced"`, or `"quality"` instead of choosing a model manually.
 
 Call `list_available_models()` for detailed guidance.
 
@@ -147,11 +187,16 @@ export PATH="$HOME/.local/bin:$PATH"
 ```
 src/pixelforge_mcp/
 ├── __init__.py          # Package init
-├── config.py            # Pydantic config, YAML loading, VERSION string
-├── server.py            # FastMCP server — 5 async tool definitions + helpers
+├── config.py            # Pydantic config, YAML loading, VERSION, VertexConfig
+├── server.py            # FastMCP server — 21 async tool definitions + helpers
+├── templates/
+│   ├── __init__.py      # Templates package
+│   └── prompts.yaml     # 24 curated prompt templates
 └── utils/
-    ├── api_client.py    # ImagenAPIClient — wraps gemini-imagen library
-    ├── cli.py           # ImagenCLI — subprocess-based fallback (legacy)
+    ├── api_client.py    # ImagenAPIClient — direct google-genai SDK
+    ├── history.py       # GenerationHistory — JSON append-only log
+    ├── templates.py     # TemplateLibrary — load, list, apply templates
+    ├── transforms.py    # Image transforms — crop, resize, rotate, etc.
     └── validation.py    # Pydantic input models with validation rules
 ```
 
@@ -251,7 +296,8 @@ pytest tests/integration/ -v
 ```
 
 Test files mirror source structure:
-- `test_validation.py` — input validation rules
-- `test_api_client.py` — API client behavior (mocked)
+- `test_validation.py` — input validation rules (110+ tests)
+- `test_api_client.py` — API client behavior with mocked google-genai SDK
 - `test_config.py` — configuration loading
-- `test_cli.py` — CLI wrapper
+- `test_server.py` — server handler tests (format_image_result, generate_output_path, estimate_cost)
+- `test_transforms.py` — image transform operations
