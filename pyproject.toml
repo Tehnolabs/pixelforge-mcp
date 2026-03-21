@@ -24,8 +24,7 @@ classifiers = [
 
 dependencies = [
     "fastmcp>=2.0.0,<3.0.0",
-    "gemini-imagen>=0.6.0",
-    "google-genai>=1.62.0",
+    "google-genai>=1.62.0,<2.0.0",
     "pillow>=10.0.0",
     "pydantic>=2.0.0",
     "pyyaml>=6.0.0",
