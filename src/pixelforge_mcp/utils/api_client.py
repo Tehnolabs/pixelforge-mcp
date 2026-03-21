@@ -204,9 +204,7 @@ class ImagenAPIClient:
         response = await client.aio.models.generate_content(
             model=model, contents=prompt, config=config
         )
-        if response.candidates and response.candidates[0].content.parts:
-            return response.candidates[0].content.parts[0].text or ""
-        return ""
+        return self._extract_text_from_response(response)
 
     async def _analyze_with_images(
         self,
@@ -233,9 +231,7 @@ class ImagenAPIClient:
                 model=TEXT_MODEL, contents=content, config=config
             )
 
-            text = ""
-            if response.candidates and response.candidates[0].content.parts:
-                text = response.candidates[0].content.parts[0].text or ""
+            text = self._extract_text_from_response(response)
 
             if text:
                 return GenerationResult(
@@ -252,6 +248,13 @@ class ImagenAPIClient:
         except Exception as e:
             logger.error(f"Analysis failed: {e}", exc_info=True)
             return GenerationResult(success=False, output="", error=str(e))
+
+    @staticmethod
+    def _extract_text_from_response(response: Any) -> str:
+        """Extract text from a genai response, handling empty candidates."""
+        if response.candidates and response.candidates[0].content.parts:
+            return response.candidates[0].content.parts[0].text or ""
+        return ""
 
     @staticmethod
     def _parse_json_from_text(text: str) -> Any:
@@ -418,9 +421,15 @@ class ImagenAPIClient:
     ) -> GenerationResult:
         """Edit an existing image with a text prompt."""
         try:
-            generator = self._get_generator()
             if model:
-                generator.model_name = model
+                # Create a fresh generator to avoid mutating the cached singleton
+                generator = GeminiImageGenerator(
+                    model_name=model,
+                    api_key=self.api_key,
+                    log_images=self.log_images,
+                )
+            else:
+                generator = self._get_generator()
 
             result = await generator.generate(
                 prompt=prompt,
@@ -674,9 +683,7 @@ class ImagenAPIClient:
             contents=[img, prompt],
             config=config,
         )
-        if response.candidates and response.candidates[0].content.parts:
-            return response.candidates[0].content.parts[0].text or ""
-        return ""
+        return self._extract_text_from_response(response)
 
     # ------------------------------------------------------------------
     # Info tools
