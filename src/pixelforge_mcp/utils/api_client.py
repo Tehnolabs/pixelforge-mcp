@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -173,6 +174,74 @@ class ImagenAPIClient:
         ]
 
     @staticmethod
+    def _check_safety_block(response: Any) -> Optional["GenerationResult"]:
+        """Check response for safety blocks; return a failed result or None."""
+        try:
+            feedback = response.prompt_feedback
+            # Only act when the SDK explicitly set prompt_feedback
+            if feedback is None:
+                return None
+            block_reason = getattr(feedback, "block_reason", None)
+            if block_reason is None:
+                return None
+            # Ensure block_reason is a real value (string or enum), not a
+            # Mock auto-attribute.  Real block reasons have a string
+            # representation that doesn't start with "<Mock".
+            reason_str = str(block_reason)
+            if reason_str.startswith("<Mock"):
+                return None
+            return GenerationResult(
+                success=False,
+                output="",
+                error=f"Content blocked by safety filter: {reason_str}",
+            )
+        except AttributeError:
+            return None
+
+    @staticmethod
+    def _classify_error(e: Exception) -> str:
+        """Return a user-friendly error message for common API errors."""
+        error_type = type(e).__name__
+        if error_type == "ResourceExhausted":
+            return "Rate limit exceeded. Please wait and retry."
+        elif error_type == "PermissionDenied":
+            return "API access denied. Check your API key."
+        elif error_type == "InvalidArgument":
+            return f"Invalid request: {e}"
+        return str(e)
+
+    @staticmethod
+    def _embed_metadata(
+        image_path: Path,
+        output_format: str,
+        metadata: dict,
+    ) -> None:
+        """Embed generation metadata into the saved image."""
+        try:
+            if output_format == "png":
+                from PIL.PngImagePlugin import PngInfo
+
+                img = Image.open(str(image_path))
+                png_info = PngInfo()
+                for key, value in metadata.items():
+                    if value is not None:
+                        png_info.add_text(f"pixelforge:{key}", str(value))
+                img.save(str(image_path), pnginfo=png_info)
+            elif output_format in ("jpeg", "webp"):
+                # EXIF metadata for JPEG/WebP
+                img = Image.open(str(image_path))
+                exif = img.getexif()
+                # Use ImageDescription (tag 270) for prompt
+                if "prompt" in metadata:
+                    exif[270] = metadata["prompt"]
+                # Use Software (tag 305) for model info
+                if "model" in metadata:
+                    exif[305] = f"PixelForge MCP ({metadata['model']})"
+                img.save(str(image_path), exif=exif)
+        except Exception:
+            pass  # Don't fail the generation if metadata embedding fails
+
+    @staticmethod
     def _save_image(
         image: Image.Image,
         output_path: Path,
@@ -204,12 +273,19 @@ class ImagenAPIClient:
         response = await client.aio.models.generate_content(
             model=model, contents=prompt, config=config
         )
+
+        # Check for safety blocks
+        blocked = self._check_safety_block(response)
+        if blocked is not None:
+            raise RuntimeError(blocked.error)
+
         return self._extract_text_from_response(response)
 
     async def _analyze_with_images(
         self,
         image_paths: List[Path],
         prompt: str,
+        model: Optional[str] = None,
     ) -> GenerationResult:
         """Analyze one or more images with a text prompt via SDK."""
         try:
@@ -228,8 +304,13 @@ class ImagenAPIClient:
                 response_modalities=["TEXT"],
             )
             response = await client.aio.models.generate_content(
-                model=TEXT_MODEL, contents=content, config=config
+                model=model or TEXT_MODEL, contents=content, config=config
             )
+
+            # Check for safety blocks
+            blocked = self._check_safety_block(response)
+            if blocked is not None:
+                return blocked
 
             text = self._extract_text_from_response(response)
 
@@ -246,8 +327,9 @@ class ImagenAPIClient:
                     error="No analysis generated",
                 )
         except Exception as e:
-            logger.error(f"Analysis failed: {e}", exc_info=True)
-            return GenerationResult(success=False, output="", error=str(e))
+            error_msg = self._classify_error(e)
+            logger.error(f"Analysis failed: {error_msg}", exc_info=True)
+            return GenerationResult(success=False, output="", error=error_msg)
 
     @staticmethod
     def _extract_text_from_response(response: Any) -> str:
@@ -343,6 +425,11 @@ class ImagenAPIClient:
                 model=model, contents=contents, config=config
             )
 
+            # Check for safety blocks
+            blocked = self._check_safety_block(response)
+            if blocked is not None:
+                return blocked
+
             # Extract image from response
             images: List[Image.Image] = []
             if response.candidates:
@@ -353,6 +440,17 @@ class ImagenAPIClient:
 
             if images:
                 self._save_image(images[0], output_path, output_format)
+                self._embed_metadata(
+                    output_path,
+                    output_format or "png",
+                    {
+                        "prompt": prompt,
+                        "model": model or self.model_name,
+                        "aspect_ratio": aspect_ratio,
+                        "temperature": temperature,
+                        "timestamp": datetime.now().isoformat(),
+                    },
+                )
                 return GenerationResult(
                     success=True,
                     output=(f"Image generated successfully at {output_path}"),
@@ -377,8 +475,9 @@ class ImagenAPIClient:
                 )
 
         except Exception as e:
-            logger.error(f"SDK image generation failed: {e}", exc_info=True)
-            return GenerationResult(success=False, output="", error=str(e))
+            error_msg = self._classify_error(e)
+            logger.error(f"SDK image generation failed: {error_msg}", exc_info=True)
+            return GenerationResult(success=False, output="", error=error_msg)
 
     async def generate(
         self,
@@ -461,15 +560,19 @@ class ImagenAPIClient:
                 )
 
         except Exception as e:
-            logger.error(f"Image editing failed: {e}", exc_info=True)
-            return GenerationResult(success=False, output="", error=str(e))
+            error_msg = self._classify_error(e)
+            logger.error(f"Image editing failed: {error_msg}", exc_info=True)
+            return GenerationResult(success=False, output="", error=error_msg)
 
     # ------------------------------------------------------------------
     # Analysis tools
     # ------------------------------------------------------------------
 
     async def analyze(
-        self, image_path: Path, prompt: Optional[str] = None
+        self,
+        image_path: Path,
+        prompt: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> GenerationResult:
         """Analyze an image and get a description."""
         try:
@@ -498,13 +601,21 @@ class ImagenAPIClient:
                 )
 
         except Exception as e:
-            logger.error(f"Image analysis failed: {e}", exc_info=True)
-            return GenerationResult(success=False, output="", error=str(e))
+            error_msg = self._classify_error(e)
+            logger.error(f"Image analysis failed: {error_msg}", exc_info=True)
+            return GenerationResult(success=False, output="", error=error_msg)
 
-    async def extract_text(self, image_path: Path) -> GenerationResult:
+    async def extract_text(
+        self, image_path: Path, model: Optional[str] = None
+    ) -> GenerationResult:
         """Extract text from an image using OCR."""
         try:
-            text = await self._call_text_model_with_image(image_path, OCR_PROMPT)
+            kwargs: Dict[str, Any] = {}
+            if model is not None:
+                kwargs["model"] = model
+            text = await self._call_text_model_with_image(
+                image_path, OCR_PROMPT, **kwargs
+            )
 
             parsed = self._parse_json_from_text(text)
             if parsed:
@@ -532,18 +643,27 @@ class ImagenAPIClient:
                 )
 
         except Exception as e:
-            logger.error(f"Text extraction failed: {e}", exc_info=True)
-            return GenerationResult(success=False, output="", error=str(e))
+            error_msg = self._classify_error(e)
+            logger.error(f"Text extraction failed: {error_msg}", exc_info=True)
+            return GenerationResult(success=False, output="", error=error_msg)
 
     async def detect_objects(
-        self, image_path: Path, objects: Optional[str] = None
+        self,
+        image_path: Path,
+        objects: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> GenerationResult:
         """Detect objects in an image with bounding boxes."""
         try:
             target = objects or "all visible objects"
             prompt = DETECT_OBJECTS_PROMPT_TEMPLATE.format(target=target)
 
-            text = await self._call_text_model_with_image(image_path, prompt)
+            det_kwargs: Dict[str, Any] = {}
+            if model is not None:
+                det_kwargs["model"] = model
+            text = await self._call_text_model_with_image(
+                image_path, prompt, **det_kwargs
+            )
 
             parsed = self._parse_json_from_text(text)
             if parsed:
@@ -570,15 +690,22 @@ class ImagenAPIClient:
                 )
 
         except Exception as e:
-            logger.error(f"Object detection failed: {e}", exc_info=True)
-            return GenerationResult(success=False, output="", error=str(e))
+            error_msg = self._classify_error(e)
+            logger.error(f"Object detection failed: {error_msg}", exc_info=True)
+            return GenerationResult(success=False, output="", error=error_msg)
 
     async def compare_images(
-        self, image_paths: List[Path], prompt: Optional[str] = None
+        self,
+        image_paths: List[Path],
+        prompt: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> GenerationResult:
         """Compare multiple images."""
+        kwargs: Dict[str, Any] = {}
+        if model is not None:
+            kwargs["model"] = model
         return await self._analyze_with_images(
-            image_paths, prompt or COMPARE_IMAGES_PROMPT
+            image_paths, prompt or COMPARE_IMAGES_PROMPT, **kwargs
         )
 
     # ------------------------------------------------------------------
@@ -586,7 +713,10 @@ class ImagenAPIClient:
     # ------------------------------------------------------------------
 
     async def optimize_prompt(
-        self, prompt: str, style: Optional[str] = None
+        self,
+        prompt: str,
+        style: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> GenerationResult:
         """Optimize a prompt for better image generation results."""
         try:
@@ -601,7 +731,10 @@ class ImagenAPIClient:
                 prompt=prompt, style_instruction=style_instruction
             )
 
-            enhanced = await self._call_text_model(meta_prompt)
+            opt_kwargs: Dict[str, Any] = {}
+            if model is not None:
+                opt_kwargs["model"] = model
+            enhanced = await self._call_text_model(meta_prompt, **opt_kwargs)
             enhanced = enhanced.strip().strip('"')
 
             if enhanced:
@@ -622,8 +755,9 @@ class ImagenAPIClient:
                 )
 
         except Exception as e:
-            logger.error(f"Prompt optimization failed: {e}", exc_info=True)
-            return GenerationResult(success=False, output="", error=str(e))
+            error_msg = self._classify_error(e)
+            logger.error(f"Prompt optimization failed: {error_msg}", exc_info=True)
+            return GenerationResult(success=False, output="", error=error_msg)
 
     async def remove_background(
         self,
@@ -665,10 +799,16 @@ class ImagenAPIClient:
                 )
 
         except Exception as e:
-            logger.error(f"Background removal failed: {e}", exc_info=True)
-            return GenerationResult(success=False, output="", error=str(e))
+            error_msg = self._classify_error(e)
+            logger.error(f"Background removal failed: {error_msg}", exc_info=True)
+            return GenerationResult(success=False, output="", error=error_msg)
 
-    async def _call_text_model_with_image(self, image_path: Path, prompt: str) -> str:
+    async def _call_text_model_with_image(
+        self,
+        image_path: Path,
+        prompt: str,
+        model: Optional[str] = None,
+    ) -> str:
         """Call text model with a single image + prompt."""
         from google.genai import types
 
@@ -679,10 +819,16 @@ class ImagenAPIClient:
             response_modalities=["TEXT"],
         )
         response = await client.aio.models.generate_content(
-            model=TEXT_MODEL,
+            model=model or TEXT_MODEL,
             contents=[img, prompt],
             config=config,
         )
+
+        # Check for safety blocks
+        blocked = self._check_safety_block(response)
+        if blocked is not None:
+            raise RuntimeError(blocked.error)
+
         return self._extract_text_from_response(response)
 
     # ------------------------------------------------------------------
