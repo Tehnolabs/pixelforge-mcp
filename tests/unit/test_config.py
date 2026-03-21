@@ -150,7 +150,7 @@ class TestConfig:
         assert config.server.name == "pixelforge-mcp"
 
     def test_save_config(self, tmp_path, monkeypatch):
-        """Test saving config to file."""
+        """Test saving config to file (API key is never persisted)."""
         monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
         monkeypatch.delenv("GOOGLE_GENERATIVE_AI_API_KEY", raising=False)
         monkeypatch.delenv("GEMINI_API_KEY", raising=False)
@@ -170,9 +170,13 @@ class TestConfig:
         # Verify file was created
         assert config_file.exists()
 
-        # Load and verify contents
+        # API key must NOT be persisted to disk (security)
+        raw = config_file.read_text()
+        assert "test-key" not in raw
+
+        # Load and verify non-secret settings survive round-trip
         loaded_config = Config.load(config_file)
-        assert loaded_config.imagen.api_key == "test-key"
+        assert loaded_config.imagen.api_key is None  # Not in file
         assert loaded_config.imagen.default_temperature == 0.8
         assert loaded_config.server.log_level == "DEBUG"
 

@@ -124,12 +124,9 @@ class Config(BaseModel):
 
         # Convert to dict with proper serialization
         data = self.model_dump()
-        # Serialize API key as plaintext for YAML (SecretStr serializes as '**********')
+        # Never persist API keys to disk — they should come from env vars
         if "imagen" in data:
-            if self.imagen.api_key is not None:
-                data["imagen"]["api_key"] = self.imagen.api_key.get_secret_value()
-            else:
-                data["imagen"].pop("api_key", None)
+            data["imagen"].pop("api_key", None)
         # Convert Path objects to strings
         if "storage" in data and "output_dir" in data["storage"]:
             data["storage"]["output_dir"] = str(data["storage"]["output_dir"])

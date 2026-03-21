@@ -64,13 +64,17 @@ def watermark(
     overlay = Image.new("RGBA", watermarked.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
-    # Try to use a default font
+    # Try system fonts, fall back to Pillow's built-in with size scaling
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont
     try:
-        font: ImageFont.FreeTypeFont | ImageFont.ImageFont = ImageFont.truetype(
-            "Arial", font_size
-        )
+        font = ImageFont.truetype("Arial", font_size)
     except (OSError, IOError):
-        font = ImageFont.load_default()
+        try:
+            # DejaVu is available on most Linux systems
+            font = ImageFont.truetype("DejaVuSans.ttf", font_size)
+        except (OSError, IOError):
+            # Pillow 10.1+ supports size param on load_default
+            font = ImageFont.load_default(size=font_size)
 
     # Calculate position
     bbox = draw.textbbox((0, 0), text, font=font)

@@ -81,6 +81,7 @@ class TestImagenAPIClient:
         mock_candidate = Mock()
         mock_candidate.content.parts = [mock_part]
         mock_response = Mock(candidates=[mock_candidate])
+        mock_response.prompt_feedback = None
 
         mock_client = Mock()
         mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
@@ -110,6 +111,7 @@ class TestImagenAPIClient:
         mock_candidate = Mock()
         mock_candidate.content.parts = []
         mock_response = Mock(candidates=[mock_candidate])
+        mock_response.prompt_feedback = None
 
         mock_client = Mock()
         mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
@@ -359,6 +361,7 @@ class TestImagenAPIClient:
         mock_candidate = Mock()
         mock_candidate.content.parts = [mock_part]
         mock_response = Mock(candidates=[mock_candidate])
+        mock_response.prompt_feedback = None
 
         mock_client = Mock()
         mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
@@ -611,6 +614,7 @@ class TestGenerateAlwaysUsesSDK:
         mock_candidate = Mock()
         mock_candidate.content.parts = [mock_part]
         mock_response = Mock(candidates=[mock_candidate])
+        mock_response.prompt_feedback = None
 
         mock_client = Mock()
         mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
@@ -1030,6 +1034,7 @@ class TestCallTextModel:
         mock_candidate = Mock()
         mock_candidate.content.parts = [mock_part]
         mock_response = Mock(candidates=[mock_candidate])
+        mock_response.prompt_feedback = None
 
         mock_client = Mock()
         mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
@@ -1048,6 +1053,7 @@ class TestCallTextModel:
     async def test_call_text_model_empty(self):
         """Test text model returns empty string when no candidates."""
         mock_response = Mock(candidates=[])
+        mock_response.prompt_feedback = None
 
         mock_client = Mock()
         mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
@@ -1065,6 +1071,7 @@ class TestCallTextModel:
         mock_candidate = Mock()
         mock_candidate.content.parts = []
         mock_response = Mock(candidates=[mock_candidate])
+        mock_response.prompt_feedback = None
 
         mock_client = Mock()
         mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
@@ -1093,6 +1100,7 @@ class TestCallTextModelWithImage:
         mock_candidate = Mock()
         mock_candidate.content.parts = [mock_part]
         mock_response = Mock(candidates=[mock_candidate])
+        mock_response.prompt_feedback = None
 
         mock_client = Mock()
         mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
@@ -1121,6 +1129,7 @@ class TestCallTextModelWithImage:
         test_img.save(str(image_path))
 
         mock_response = Mock(candidates=[])
+        mock_response.prompt_feedback = None
 
         mock_client = Mock()
         mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
@@ -1144,6 +1153,7 @@ class TestCallTextModelWithImage:
         mock_candidate = Mock()
         mock_candidate.content.parts = [mock_part]
         mock_response = Mock(candidates=[mock_candidate])
+        mock_response.prompt_feedback = None
 
         mock_client = Mock()
         mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)

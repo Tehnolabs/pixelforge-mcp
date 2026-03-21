@@ -172,25 +172,18 @@ class ImagenAPIClient:
     def _check_safety_block(response: Any) -> Optional["GenerationResult"]:
         """Check response for safety blocks; return a failed result or None."""
         try:
-            feedback = response.prompt_feedback
-            # Only act when the SDK explicitly set prompt_feedback
+            feedback = getattr(response, "prompt_feedback", None)
             if feedback is None:
                 return None
             block_reason = getattr(feedback, "block_reason", None)
             if block_reason is None:
                 return None
-            # Ensure block_reason is a real value (string or enum), not a
-            # Mock auto-attribute.  Real block reasons have a string
-            # representation that doesn't start with "<Mock".
-            reason_str = str(block_reason)
-            if reason_str.startswith("<Mock"):
-                return None
             return GenerationResult(
                 success=False,
                 output="",
-                error=f"Content blocked by safety filter: {reason_str}",
+                error=f"Content blocked by safety filter: {block_reason}",
             )
-        except AttributeError:
+        except Exception:
             return None
 
     @staticmethod
