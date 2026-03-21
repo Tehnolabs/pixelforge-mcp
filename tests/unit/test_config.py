@@ -1,7 +1,5 @@
 """Unit tests for configuration management."""
 
-import os
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -68,7 +66,7 @@ class TestStorageConfig:
         output_dir = tmp_path / "test_images"
         assert not output_dir.exists()
 
-        config = StorageConfig(output_dir=output_dir)
+        StorageConfig(output_dir=output_dir)
         assert output_dir.exists()
         assert output_dir.is_dir()
 
