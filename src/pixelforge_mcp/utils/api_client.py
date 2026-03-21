@@ -256,19 +256,25 @@ class ImagenAPIClient:
     @staticmethod
     def _parse_json_from_text(text: str) -> Any:
         """Extract and parse JSON from model text output."""
-        # Strip markdown code fences if present
         cleaned = text.strip()
-        if cleaned.startswith("```"):
-            lines = cleaned.split("\n")
-            # Remove first and last lines (fences)
-            lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            cleaned = "\n".join(lines)
-        try:
-            return json.loads(cleaned)
-        except json.JSONDecodeError:
-            return None
+
+        # Find the outermost JSON structure (earliest opening bracket)
+        candidates = []
+        for open_ch, close_ch in [("{", "}"), ("[", "]")]:
+            start = cleaned.find(open_ch)
+            end = cleaned.rfind(close_ch)
+            if start != -1 and end > start:
+                candidates.append((start, cleaned[start : end + 1]))
+
+        # Try candidates in order of earliest start position
+        candidates.sort(key=lambda c: c[0])
+        for _, fragment in candidates:
+            try:
+                return json.loads(fragment)
+            except json.JSONDecodeError:
+                continue
+
+        return None
 
     # ------------------------------------------------------------------
     # Generation

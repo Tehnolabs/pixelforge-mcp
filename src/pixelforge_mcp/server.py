@@ -179,8 +179,8 @@ async def generate_image(
         for i in range(n):
             suffix = f"_{i + 1}" if n > 1 else ""
             if inputs.output_filename and n > 1:
-                base, ext = inputs.output_filename.rsplit(".", 1)
-                name = f"{base}{suffix}.{ext}"
+                p = Path(inputs.output_filename)
+                name = f"{p.stem}{suffix}{p.suffix or '.png'}"
             elif inputs.output_filename:
                 name = inputs.output_filename
             else:
