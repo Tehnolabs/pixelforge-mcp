@@ -6,9 +6,12 @@ import pytest
 from PIL import Image
 
 from pixelforge_mcp.utils.api_client import (
+    COMPARE_IMAGES_PROMPT,
     DEFAULT_ANALYSIS_PROMPT,
+    OCR_PROMPT,
     PILLOW_FORMAT_MAP,
     SAFETY_PRESETS,
+    TEXT_MODEL,
     GenerationResult,
     ImagenAPIClient,
 )
@@ -462,12 +465,11 @@ class TestEditWithModel:
     @pytest.mark.asyncio
     @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
     async def test_edit_with_model_override(self, mock_generator_class, tmp_path):
-        """Test edit applies model override."""
+        """Test edit creates a fresh generator with model override."""
         mock_generator = Mock()
         mock_result = Mock()
         mock_result.images = [Mock(spec=Image.Image)]
         mock_generator.generate = AsyncMock(return_value=mock_result)
-        mock_generator.model_name = "gemini-2.5-flash-image"
         mock_generator_class.return_value = mock_generator
 
         client = ImagenAPIClient()
@@ -483,7 +485,13 @@ class TestEditWithModel:
         )
 
         assert result.success is True
-        assert mock_generator.model_name == "gemini-3-pro-image-preview"
+        # BUG-3 fix: a fresh generator is created with the override model
+        # instead of mutating the cached singleton
+        mock_generator_class.assert_called_with(
+            model_name="gemini-3-pro-image-preview",
+            api_key=client.api_key,
+            log_images=client.log_images,
+        )
 
     @pytest.mark.asyncio
     @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
@@ -596,3 +604,517 @@ class TestGenerateAlwaysUsesSDK:
         assert result.success is True
         # Verify SDK was called (not gemini-imagen)
         mock_client.aio.models.generate_content.assert_called_once()
+
+
+class TestExtractText:
+    """Tests for extract_text method."""
+
+    @pytest.mark.asyncio
+    async def test_extract_text_success_json(self, tmp_path):
+        """Test successful text extraction with valid JSON response."""
+        client = ImagenAPIClient(api_key="test-key")
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        json_response = (
+            '{"text": "Hello World", '
+            '"blocks": [{"text": "Hello World", "confidence": "high"}]}'
+        )
+        client._call_text_model_with_image = AsyncMock(return_value=json_response)
+
+        result = await client.extract_text(image_path)
+
+        assert result.success is True
+        assert result.output == "Hello World"
+        assert result.data["extracted_text"] == "Hello World"
+        assert len(result.data["blocks"]) == 1
+        assert result.data["blocks"][0]["confidence"] == "high"
+        assert result.data["raw_response"] == json_response
+        assert result.data["image_path"] == str(image_path)
+        client._call_text_model_with_image.assert_called_once_with(
+            image_path, OCR_PROMPT
+        )
+
+    @pytest.mark.asyncio
+    async def test_extract_text_fallback_raw_text(self, tmp_path):
+        """Test text extraction falls back to raw text when JSON parsing fails."""
+        client = ImagenAPIClient(api_key="test-key")
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        raw_response = "Some plain text without JSON"
+        client._call_text_model_with_image = AsyncMock(return_value=raw_response)
+
+        result = await client.extract_text(image_path)
+
+        assert result.success is True
+        assert result.output == raw_response
+        assert result.data["extracted_text"] == raw_response
+        assert result.data["blocks"] == []
+        assert result.data["raw_response"] == raw_response
+
+    @pytest.mark.asyncio
+    async def test_extract_text_exception(self, tmp_path):
+        """Test text extraction handles exceptions."""
+        client = ImagenAPIClient(api_key="test-key")
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        client._call_text_model_with_image = AsyncMock(
+            side_effect=Exception("API error")
+        )
+
+        result = await client.extract_text(image_path)
+
+        assert result.success is False
+        assert "API error" in result.error
+
+
+class TestDetectObjects:
+    """Tests for detect_objects method."""
+
+    @pytest.mark.asyncio
+    async def test_detect_objects_list_result(self, tmp_path):
+        """Test detection with JSON array response."""
+        client = ImagenAPIClient(api_key="test-key")
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        json_response = (
+            '[{"label": "cat", "box_2d": [100, 200, 300, 400], '
+            '"confidence": "high"}, '
+            '{"label": "dog", "box_2d": [500, 600, 700, 800], '
+            '"confidence": "medium"}]'
+        )
+        client._call_text_model_with_image = AsyncMock(return_value=json_response)
+
+        result = await client.detect_objects(image_path)
+
+        assert result.success is True
+        assert result.output == "Detected 2 object(s)"
+        assert result.data["count"] == 2
+        assert len(result.data["detections"]) == 2
+        assert result.data["detections"][0]["label"] == "cat"
+        assert result.data["detections"][1]["label"] == "dog"
+
+    @pytest.mark.asyncio
+    async def test_detect_objects_dict_result(self, tmp_path):
+        """Test detection wraps a dict response in a list."""
+        client = ImagenAPIClient(api_key="test-key")
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        json_response = (
+            '{"label": "cat", "box_2d": [100, 200, 300, 400], ' '"confidence": "high"}'
+        )
+        client._call_text_model_with_image = AsyncMock(return_value=json_response)
+
+        result = await client.detect_objects(image_path)
+
+        assert result.success is True
+        assert result.output == "Detected 1 object(s)"
+        assert result.data["count"] == 1
+        assert result.data["detections"][0]["label"] == "cat"
+
+    @pytest.mark.asyncio
+    async def test_detect_objects_with_target(self, tmp_path):
+        """Test detection with specific objects parameter."""
+        client = ImagenAPIClient(api_key="test-key")
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        json_response = (
+            '[{"label": "cat", "box_2d": [100, 200, 300, 400], '
+            '"confidence": "high"}]'
+        )
+        client._call_text_model_with_image = AsyncMock(return_value=json_response)
+
+        result = await client.detect_objects(image_path, objects="cats and dogs")
+
+        assert result.success is True
+        # Verify the prompt used the specific target
+        call_args = client._call_text_model_with_image.call_args
+        prompt_used = call_args[0][1]
+        assert "cats and dogs" in prompt_used
+
+    @pytest.mark.asyncio
+    async def test_detect_objects_empty(self, tmp_path):
+        """Test detection with non-JSON response returns empty detections."""
+        client = ImagenAPIClient(api_key="test-key")
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        client._call_text_model_with_image = AsyncMock(
+            return_value="No objects found in this image"
+        )
+
+        result = await client.detect_objects(image_path)
+
+        assert result.success is True
+        assert result.data["detections"] == []
+        assert result.data["count"] == 0
+        assert result.data["raw_response"] == "No objects found in this image"
+
+    @pytest.mark.asyncio
+    async def test_detect_objects_exception(self, tmp_path):
+        """Test detection handles exceptions."""
+        client = ImagenAPIClient(api_key="test-key")
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        client._call_text_model_with_image = AsyncMock(
+            side_effect=Exception("Connection error")
+        )
+
+        result = await client.detect_objects(image_path)
+
+        assert result.success is False
+        assert "Connection error" in result.error
+
+
+class TestCompareImages:
+    """Tests for compare_images method."""
+
+    @pytest.mark.asyncio
+    async def test_compare_images_default_prompt(self, tmp_path):
+        """Test compare_images uses default prompt when none provided."""
+        client = ImagenAPIClient(api_key="test-key")
+
+        mock_result = GenerationResult(
+            success=True,
+            output="The images are very similar",
+            data={"analysis": "The images are very similar"},
+        )
+        client._analyze_with_images = AsyncMock(return_value=mock_result)
+
+        image_paths = [tmp_path / "img1.png", tmp_path / "img2.png"]
+
+        result = await client.compare_images(image_paths)
+
+        assert result.success is True
+        assert result.output == "The images are very similar"
+        client._analyze_with_images.assert_called_once_with(
+            image_paths, COMPARE_IMAGES_PROMPT
+        )
+
+    @pytest.mark.asyncio
+    async def test_compare_images_custom_prompt(self, tmp_path):
+        """Test compare_images uses custom prompt when provided."""
+        client = ImagenAPIClient(api_key="test-key")
+
+        mock_result = GenerationResult(
+            success=True,
+            output="Custom comparison result",
+            data={"analysis": "Custom comparison result"},
+        )
+        client._analyze_with_images = AsyncMock(return_value=mock_result)
+
+        image_paths = [tmp_path / "img1.png", tmp_path / "img2.png"]
+        custom_prompt = "Which image has more blue?"
+
+        result = await client.compare_images(image_paths, prompt=custom_prompt)
+
+        assert result.success is True
+        client._analyze_with_images.assert_called_once_with(image_paths, custom_prompt)
+
+
+class TestOptimizePrompt:
+    """Tests for optimize_prompt method."""
+
+    @pytest.mark.asyncio
+    async def test_optimize_with_style(self):
+        """Test prompt optimization with a style parameter."""
+        client = ImagenAPIClient(api_key="test-key")
+        client._call_text_model = AsyncMock(
+            return_value='"A photorealistic sunset over mountains"'
+        )
+
+        result = await client.optimize_prompt(
+            prompt="sunset over mountains", style="photorealistic"
+        )
+
+        assert result.success is True
+        assert result.output == "A photorealistic sunset over mountains"
+        assert result.data["original_prompt"] == "sunset over mountains"
+        assert result.data["enhanced_prompt"] == (
+            "A photorealistic sunset over mountains"
+        )
+        assert result.data["style"] == "photorealistic"
+
+        # Verify style instruction was included in the meta prompt
+        call_args = client._call_text_model.call_args[0][0]
+        assert "photorealistic" in call_args
+
+    @pytest.mark.asyncio
+    async def test_optimize_without_style(self):
+        """Test prompt optimization without a style parameter."""
+        client = ImagenAPIClient(api_key="test-key")
+        client._call_text_model = AsyncMock(
+            return_value="Enhanced: a vivid sunset with dramatic lighting"
+        )
+
+        result = await client.optimize_prompt(prompt="sunset")
+
+        assert result.success is True
+        assert result.output == "Enhanced: a vivid sunset with dramatic lighting"
+        assert result.data["original_prompt"] == "sunset"
+        assert result.data["style"] is None
+
+    @pytest.mark.asyncio
+    async def test_optimize_empty_response(self):
+        """Test prompt optimization fails on empty response."""
+        client = ImagenAPIClient(api_key="test-key")
+        client._call_text_model = AsyncMock(return_value="")
+
+        result = await client.optimize_prompt(prompt="sunset")
+
+        assert result.success is False
+        assert result.error == "Prompt optimization failed"
+
+    @pytest.mark.asyncio
+    async def test_optimize_exception(self):
+        """Test prompt optimization handles exceptions."""
+        client = ImagenAPIClient(api_key="test-key")
+        client._call_text_model = AsyncMock(
+            side_effect=Exception("Rate limit exceeded")
+        )
+
+        result = await client.optimize_prompt(prompt="sunset")
+
+        assert result.success is False
+        assert "Rate limit exceeded" in result.error
+
+
+class TestRemoveBackground:
+    """Tests for remove_background method."""
+
+    @pytest.mark.asyncio
+    @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
+    async def test_remove_bg_success(self, mock_generator_class, tmp_path):
+        """Test successful background removal."""
+        mock_generator = Mock()
+        mock_result = Mock()
+        mock_result.images = [Mock(spec=Image.Image)]
+        mock_generator.generate = AsyncMock(return_value=mock_result)
+        mock_generator_class.return_value = mock_generator
+
+        client = ImagenAPIClient()
+        image_path = tmp_path / "input.png"
+        image_path.touch()
+        output_path = tmp_path / "output.png"
+
+        result = await client.remove_background(image_path, output_path)
+
+        assert result.success is True
+        assert "Background removed" in result.output
+        assert result.images == mock_result.images
+        assert result.image_paths == [str(output_path)]
+        assert result.data["image_path"] == str(output_path)
+
+        # Verify generator was called with correct params
+        call_kwargs = mock_generator.generate.call_args[1]
+        assert "Remove the background" in call_kwargs["prompt"]
+        assert call_kwargs["input_images"] == [str(image_path)]
+        assert call_kwargs["output_images"] == [str(output_path)]
+
+    @pytest.mark.asyncio
+    @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
+    async def test_remove_bg_format_conversion(self, mock_generator_class, tmp_path):
+        """Test background removal with format conversion."""
+        mock_generator = Mock()
+        mock_result = Mock()
+        mock_result.images = [Mock(spec=Image.Image)]
+        mock_generator.generate = AsyncMock(return_value=mock_result)
+        mock_generator_class.return_value = mock_generator
+
+        client = ImagenAPIClient()
+        image_path = tmp_path / "input.png"
+        image_path.touch()
+        output_path = tmp_path / "output.jpg"
+
+        # Create a real image at the output path so re-encoding can open it
+        test_img = Image.new("RGB", (10, 10), color="red")
+        test_img.save(str(output_path), format="PNG")
+
+        result = await client.remove_background(
+            image_path, output_path, output_format="jpeg"
+        )
+
+        assert result.success is True
+
+    @pytest.mark.asyncio
+    @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
+    async def test_remove_bg_failure(self, mock_generator_class, tmp_path):
+        """Test background removal with no images result."""
+        mock_generator = Mock()
+        mock_result = Mock()
+        mock_result.images = None
+        mock_generator.generate = AsyncMock(return_value=mock_result)
+        mock_generator_class.return_value = mock_generator
+
+        client = ImagenAPIClient()
+        image_path = tmp_path / "input.png"
+        image_path.touch()
+        output_path = tmp_path / "output.png"
+
+        result = await client.remove_background(image_path, output_path)
+
+        assert result.success is False
+        assert result.error == "Background removal failed"
+
+    @pytest.mark.asyncio
+    @patch("pixelforge_mcp.utils.api_client.GeminiImageGenerator")
+    async def test_remove_bg_exception(self, mock_generator_class, tmp_path):
+        """Test background removal handles exceptions."""
+        mock_generator = Mock()
+        mock_generator.generate = AsyncMock(
+            side_effect=Exception("Service unavailable")
+        )
+        mock_generator_class.return_value = mock_generator
+
+        client = ImagenAPIClient()
+        image_path = tmp_path / "input.png"
+        image_path.touch()
+        output_path = tmp_path / "output.png"
+
+        result = await client.remove_background(image_path, output_path)
+
+        assert result.success is False
+        assert "Service unavailable" in result.error
+
+
+class TestCallTextModel:
+    """Tests for _call_text_model private method."""
+
+    @pytest.mark.asyncio
+    async def test_call_text_model_success(self):
+        """Test successful text model call."""
+        mock_part = Mock()
+        mock_part.text = "Generated response text"
+        mock_candidate = Mock()
+        mock_candidate.content.parts = [mock_part]
+        mock_response = Mock(candidates=[mock_candidate])
+
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
+        result = await client._call_text_model("test prompt")
+
+        assert result == "Generated response text"
+        call_kwargs = mock_client.aio.models.generate_content.call_args[1]
+        assert call_kwargs["model"] == TEXT_MODEL
+        assert call_kwargs["contents"] == "test prompt"
+
+    @pytest.mark.asyncio
+    async def test_call_text_model_empty(self):
+        """Test text model returns empty string when no candidates."""
+        mock_response = Mock(candidates=[])
+
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
+        result = await client._call_text_model("test prompt")
+
+        assert result == ""
+
+    @pytest.mark.asyncio
+    async def test_call_text_model_empty_parts(self):
+        """Test text model returns empty string when parts list is empty."""
+        mock_candidate = Mock()
+        mock_candidate.content.parts = []
+        mock_response = Mock(candidates=[mock_candidate])
+
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
+        result = await client._call_text_model("test prompt")
+
+        assert result == ""
+
+
+class TestCallTextModelWithImage:
+    """Tests for _call_text_model_with_image private method."""
+
+    @pytest.mark.asyncio
+    async def test_with_image_success(self, tmp_path):
+        """Test successful text model call with image."""
+        # Create a real small image for PIL.Image.open
+        test_img = Image.new("RGB", (10, 10), color="blue")
+        image_path = tmp_path / "test.png"
+        test_img.save(str(image_path))
+
+        mock_part = Mock()
+        mock_part.text = "Description of the image"
+        mock_candidate = Mock()
+        mock_candidate.content.parts = [mock_part]
+        mock_response = Mock(candidates=[mock_candidate])
+
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
+        result = await client._call_text_model_with_image(
+            image_path, "Describe this image"
+        )
+
+        assert result == "Description of the image"
+        call_kwargs = mock_client.aio.models.generate_content.call_args[1]
+        assert call_kwargs["model"] == TEXT_MODEL
+        # Contents should be [image, prompt]
+        contents = call_kwargs["contents"]
+        assert len(contents) == 2
+        assert isinstance(contents[0], Image.Image)
+        assert contents[1] == "Describe this image"
+
+    @pytest.mark.asyncio
+    async def test_with_image_empty(self, tmp_path):
+        """Test text model with image returns empty on no candidates."""
+        test_img = Image.new("RGB", (10, 10), color="green")
+        image_path = tmp_path / "test.png"
+        test_img.save(str(image_path))
+
+        mock_response = Mock(candidates=[])
+
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
+        result = await client._call_text_model_with_image(image_path, "Describe this")
+
+        assert result == ""
+
+    @pytest.mark.asyncio
+    async def test_with_image_none_text(self, tmp_path):
+        """Test text model with image returns empty when text is None."""
+        test_img = Image.new("RGB", (10, 10), color="red")
+        image_path = tmp_path / "test.png"
+        test_img.save(str(image_path))
+
+        mock_part = Mock()
+        mock_part.text = None
+        mock_candidate = Mock()
+        mock_candidate.content.parts = [mock_part]
+        mock_response = Mock(candidates=[mock_candidate])
+
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
+        result = await client._call_text_model_with_image(image_path, "Describe this")
+
+        assert result == ""
