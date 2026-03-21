@@ -1,5 +1,6 @@
 """API client for gemini-imagen library and direct google-genai SDK."""
 
+import json
 import logging
 import os
 from dataclasses import dataclass
@@ -13,7 +14,51 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 DEFAULT_ANALYSIS_PROMPT = (
-    "Describe this image in detail, including objects, colors, composition, and mood."
+    "Describe this image in detail, including objects, "
+    "colors, composition, and mood."
+)
+
+OCR_PROMPT = (
+    "Extract all visible text from this image. "
+    "Return the result as a JSON object with these fields:\n"
+    '- "text": the full extracted text as a single string\n'
+    '- "blocks": a list of text blocks, each with "text" and '
+    '"confidence" (high/medium/low)\n'
+    "Return ONLY valid JSON, no markdown."
+)
+
+DETECT_OBJECTS_PROMPT_TEMPLATE = (
+    "Detect {target} in this image. For each object found, return "
+    "a JSON array where each element has:\n"
+    '- "label": the object class name\n'
+    '- "box_2d": [y_min, x_min, y_max, x_max] normalized to '
+    "0-1000 scale\n"
+    '- "confidence": "high", "medium", or "low"\n'
+    "Return ONLY valid JSON, no markdown."
+)
+
+OPTIMIZE_PROMPT_TEMPLATE = (
+    "You are an expert at writing prompts for AI image generation. "
+    "Enhance the following prompt to produce better, more detailed "
+    "images. Add specific details about:\n"
+    "- Lighting and atmosphere\n"
+    "- Composition and framing\n"
+    "- Colors and textures\n"
+    "- Style and artistic technique\n"
+    "- Camera angle or perspective\n\n"
+    "{style_instruction}"
+    "Original prompt: {prompt}\n\n"
+    "Return ONLY the enhanced prompt text, nothing else. "
+    "Keep it under 500 characters."
+)
+
+COMPARE_IMAGES_PROMPT = (
+    "Compare these images in detail. Analyze:\n"
+    "- Visual differences and similarities\n"
+    "- Color, composition, and style differences\n"
+    "- Quality and resolution differences\n"
+    "- Content and subject matter comparison\n"
+    "Provide a structured analysis."
 )
 
 # Safety presets — maps user-friendly names to SDK threshold names
@@ -30,6 +75,9 @@ PILLOW_FORMAT_MAP = {
     "webp": "WEBP",
 }
 
+# Text-only model for prompt optimization (not image model)
+TEXT_MODEL = "gemini-2.5-flash"
+
 
 @dataclass
 class GenerationResult:
@@ -44,11 +92,11 @@ class GenerationResult:
 
 
 class ImagenAPIClient:
-    """Client for image generation via gemini-imagen and direct google-genai SDK.
+    """Client for image generation via gemini-imagen and direct SDK.
 
     Uses gemini-imagen for basic calls (proven path, LangSmith tracing).
-    Uses google-genai SDK directly when extended ImageConfig params are needed
-    (image_size, person_generation) — bypasses gemini-imagen limitations.
+    Uses google-genai SDK directly when extended params are needed
+    (image_size, person_generation, thinking, grounding).
     """
 
     def __init__(
@@ -74,7 +122,7 @@ class ImagenAPIClient:
         return self._generator
 
     def _get_genai_client(self) -> Any:
-        """Get or create direct google-genai client for extended features."""
+        """Get or create direct google-genai client."""
         if self._genai_client is None:
             from google import genai
 
@@ -86,18 +134,27 @@ class ImagenAPIClient:
             )
             if not api_key:
                 raise ValueError(
-                    "No API key found. Set GOOGLE_API_KEY environment variable."
+                    "No API key found. " "Set GOOGLE_API_KEY environment variable."
                 )
             self._genai_client = genai.Client(api_key=api_key)
         return self._genai_client
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _needs_direct_sdk(
         image_size: Optional[str] = None,
         person_generation: Optional[str] = None,
+        reference_images: Optional[List[str]] = None,
     ) -> bool:
-        """Check if the call requires direct SDK (extended ImageConfig params)."""
-        return image_size is not None or person_generation is not None
+        """Check if the call requires direct SDK."""
+        return (
+            image_size is not None
+            or person_generation is not None
+            or reference_images is not None
+        )
 
     @staticmethod
     def _build_safety_settings(
@@ -148,6 +205,88 @@ class ImagenAPIClient:
 
         image.save(str(output_path), **save_kwargs)
 
+    async def _call_text_model(self, prompt: str, model: str = TEXT_MODEL) -> str:
+        """Call a Gemini text model and return the text response."""
+        from google.genai import types
+
+        client = self._get_genai_client()
+        config = types.GenerateContentConfig(
+            response_modalities=["TEXT"],
+            temperature=0.7,
+        )
+        response = await client.aio.models.generate_content(
+            model=model, contents=prompt, config=config
+        )
+        if response.candidates and response.candidates[0].content.parts:
+            return response.candidates[0].content.parts[0].text or ""
+        return ""
+
+    async def _analyze_with_images(
+        self,
+        image_paths: List[Path],
+        prompt: str,
+    ) -> GenerationResult:
+        """Analyze one or more images with a text prompt via SDK."""
+        try:
+            from google.genai import types
+
+            client = self._get_genai_client()
+
+            # Build content: images + prompt
+            content: List[Any] = []
+            for img_path in image_paths:
+                img = Image.open(str(img_path))
+                content.append(img)
+            content.append(prompt)
+
+            config = types.GenerateContentConfig(
+                response_modalities=["TEXT"],
+            )
+            response = await client.aio.models.generate_content(
+                model=TEXT_MODEL, contents=content, config=config
+            )
+
+            text = ""
+            if response.candidates and response.candidates[0].content.parts:
+                text = response.candidates[0].content.parts[0].text or ""
+
+            if text:
+                return GenerationResult(
+                    success=True,
+                    output=text,
+                    data={"analysis": text},
+                )
+            else:
+                return GenerationResult(
+                    success=False,
+                    output="",
+                    error="No analysis generated",
+                )
+        except Exception as e:
+            logger.error(f"Analysis failed: {e}", exc_info=True)
+            return GenerationResult(success=False, output="", error=str(e))
+
+    @staticmethod
+    def _parse_json_from_text(text: str) -> Any:
+        """Extract and parse JSON from model text output."""
+        # Strip markdown code fences if present
+        cleaned = text.strip()
+        if cleaned.startswith("```"):
+            lines = cleaned.split("\n")
+            # Remove first and last lines (fences)
+            lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            cleaned = "\n".join(lines)
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            return None
+
+    # ------------------------------------------------------------------
+    # Generation
+    # ------------------------------------------------------------------
+
     async def _generate_via_sdk(
         self,
         prompt: str,
@@ -158,9 +297,10 @@ class ImagenAPIClient:
         safety_setting: Optional[str] = None,
         image_size: Optional[str] = None,
         person_generation: Optional[str] = None,
+        reference_images: Optional[List[str]] = None,
         output_format: str = "png",
     ) -> GenerationResult:
-        """Generate using google-genai SDK directly for extended ImageConfig."""
+        """Generate using google-genai SDK directly."""
         try:
             from google.genai import types
 
@@ -168,7 +308,7 @@ class ImagenAPIClient:
 
             client = self._get_genai_client()
 
-            # Build ImageConfig with all supported params
+            # Build ImageConfig
             image_config_params: Dict[str, Any] = {}
             if aspect_ratio:
                 image_config_params["aspect_ratio"] = aspect_ratio
@@ -194,11 +334,17 @@ class ImagenAPIClient:
 
             config = types.GenerateContentConfig(**config_params)
 
+            # Build content with reference images
+            contents: List[Any] = []
+            if reference_images:
+                for ref_path in reference_images:
+                    ref_img = Image.open(ref_path)
+                    contents.append(ref_img)
+            contents.append(prompt)
+
             # Call Gemini API
             response = await client.aio.models.generate_content(
-                model=model,
-                contents=prompt,
-                config=config,
+                model=model, contents=contents, config=config
             )
 
             # Extract image from response
@@ -211,10 +357,9 @@ class ImagenAPIClient:
 
             if images:
                 self._save_image(images[0], output_path, output_format)
-
                 return GenerationResult(
                     success=True,
-                    output=f"Image generated successfully at {output_path}",
+                    output=(f"Image generated successfully at {output_path}"),
                     images=images,
                     image_paths=[str(output_path)],
                     data={
@@ -223,6 +368,9 @@ class ImagenAPIClient:
                         "temperature": temperature,
                         "image_size": image_size,
                         "person_generation": person_generation,
+                        "reference_images_count": (
+                            len(reference_images) if reference_images else 0
+                        ),
                     },
                 )
             else:
@@ -234,11 +382,7 @@ class ImagenAPIClient:
 
         except Exception as e:
             logger.error(f"SDK image generation failed: {e}", exc_info=True)
-            return GenerationResult(
-                success=False,
-                output="",
-                error=str(e),
-            )
+            return GenerationResult(success=False, output="", error=str(e))
 
     async def generate(
         self,
@@ -250,15 +394,15 @@ class ImagenAPIClient:
         safety_setting: Optional[str] = None,
         image_size: Optional[str] = None,
         person_generation: Optional[str] = None,
+        reference_images: Optional[List[str]] = None,
         output_format: str = "png",
     ) -> GenerationResult:
         """Generate an image from a text prompt.
 
-        Routes to direct SDK when extended params (image_size,
-        person_generation) are specified. Falls back to gemini-imagen
-        wrapper for basic calls.
+        Routes to direct SDK when extended params are specified.
+        Falls back to gemini-imagen wrapper for basic calls.
         """
-        if self._needs_direct_sdk(image_size, person_generation):
+        if self._needs_direct_sdk(image_size, person_generation, reference_images):
             return await self._generate_via_sdk(
                 prompt=prompt,
                 output_path=output_path,
@@ -268,6 +412,7 @@ class ImagenAPIClient:
                 safety_setting=safety_setting,
                 image_size=image_size,
                 person_generation=person_generation,
+                reference_images=reference_images,
                 output_format=output_format,
             )
 
@@ -284,14 +429,13 @@ class ImagenAPIClient:
             )
 
             if result.images:
-                # Re-save in requested format if not the default png
                 if output_format != "png" and output_path.exists():
                     img = Image.open(str(output_path))
                     self._save_image(img, output_path, output_format)
 
                 return GenerationResult(
                     success=True,
-                    output=f"Image generated successfully at {output_path}",
+                    output=(f"Image generated successfully at {output_path}"),
                     images=result.images,
                     image_paths=[str(output_path)],
                     data={
@@ -309,11 +453,7 @@ class ImagenAPIClient:
 
         except Exception as e:
             logger.error(f"Image generation failed: {e}", exc_info=True)
-            return GenerationResult(
-                success=False,
-                output="",
-                error=str(e),
-            )
+            return GenerationResult(success=False, output="", error=str(e))
 
     async def edit(
         self,
@@ -344,7 +484,7 @@ class ImagenAPIClient:
 
                 return GenerationResult(
                     success=True,
-                    output=f"Image edited successfully at {output_path}",
+                    output=(f"Image edited successfully at {output_path}"),
                     images=result.images,
                     image_paths=[str(output_path)],
                     data={
@@ -361,11 +501,11 @@ class ImagenAPIClient:
 
         except Exception as e:
             logger.error(f"Image editing failed: {e}", exc_info=True)
-            return GenerationResult(
-                success=False,
-                output="",
-                error=str(e),
-            )
+            return GenerationResult(success=False, output="", error=str(e))
+
+    # ------------------------------------------------------------------
+    # Analysis tools
+    # ------------------------------------------------------------------
 
     async def analyze(
         self, image_path: Path, prompt: Optional[str] = None
@@ -398,11 +538,197 @@ class ImagenAPIClient:
 
         except Exception as e:
             logger.error(f"Image analysis failed: {e}", exc_info=True)
-            return GenerationResult(
-                success=False,
-                output="",
-                error=str(e),
+            return GenerationResult(success=False, output="", error=str(e))
+
+    async def extract_text(self, image_path: Path) -> GenerationResult:
+        """Extract text from an image using OCR."""
+        try:
+            text = await self._call_text_model_with_image(image_path, OCR_PROMPT)
+
+            parsed = self._parse_json_from_text(text)
+            if parsed:
+                return GenerationResult(
+                    success=True,
+                    output=parsed.get("text", text),
+                    data={
+                        "extracted_text": parsed.get("text", ""),
+                        "blocks": parsed.get("blocks", []),
+                        "raw_response": text,
+                        "image_path": str(image_path),
+                    },
+                )
+            else:
+                # Fallback: return raw text if JSON parsing fails
+                return GenerationResult(
+                    success=True,
+                    output=text,
+                    data={
+                        "extracted_text": text,
+                        "blocks": [],
+                        "raw_response": text,
+                        "image_path": str(image_path),
+                    },
+                )
+
+        except Exception as e:
+            logger.error(f"Text extraction failed: {e}", exc_info=True)
+            return GenerationResult(success=False, output="", error=str(e))
+
+    async def detect_objects(
+        self, image_path: Path, objects: Optional[str] = None
+    ) -> GenerationResult:
+        """Detect objects in an image with bounding boxes."""
+        try:
+            target = objects or "all visible objects"
+            prompt = DETECT_OBJECTS_PROMPT_TEMPLATE.format(target=target)
+
+            text = await self._call_text_model_with_image(image_path, prompt)
+
+            parsed = self._parse_json_from_text(text)
+            if parsed:
+                detections = parsed if isinstance(parsed, list) else [parsed]
+                return GenerationResult(
+                    success=True,
+                    output=f"Detected {len(detections)} object(s)",
+                    data={
+                        "detections": detections,
+                        "count": len(detections),
+                        "image_path": str(image_path),
+                    },
+                )
+            else:
+                return GenerationResult(
+                    success=True,
+                    output=text,
+                    data={
+                        "detections": [],
+                        "count": 0,
+                        "raw_response": text,
+                        "image_path": str(image_path),
+                    },
+                )
+
+        except Exception as e:
+            logger.error(f"Object detection failed: {e}", exc_info=True)
+            return GenerationResult(success=False, output="", error=str(e))
+
+    async def compare_images(
+        self, image_paths: List[Path], prompt: Optional[str] = None
+    ) -> GenerationResult:
+        """Compare multiple images."""
+        return await self._analyze_with_images(
+            image_paths, prompt or COMPARE_IMAGES_PROMPT
+        )
+
+    # ------------------------------------------------------------------
+    # Utility tools
+    # ------------------------------------------------------------------
+
+    async def optimize_prompt(
+        self, prompt: str, style: Optional[str] = None
+    ) -> GenerationResult:
+        """Optimize a prompt for better image generation results."""
+        try:
+            style_instruction = ""
+            if style:
+                style_instruction = (
+                    f"Target style: {style}. Tailor the prompt "
+                    f"specifically for {style} output.\n\n"
+                )
+
+            meta_prompt = OPTIMIZE_PROMPT_TEMPLATE.format(
+                prompt=prompt, style_instruction=style_instruction
             )
+
+            enhanced = await self._call_text_model(meta_prompt)
+            enhanced = enhanced.strip().strip('"')
+
+            if enhanced:
+                return GenerationResult(
+                    success=True,
+                    output=enhanced,
+                    data={
+                        "original_prompt": prompt,
+                        "enhanced_prompt": enhanced,
+                        "style": style,
+                    },
+                )
+            else:
+                return GenerationResult(
+                    success=False,
+                    output="",
+                    error="Prompt optimization failed",
+                )
+
+        except Exception as e:
+            logger.error(f"Prompt optimization failed: {e}", exc_info=True)
+            return GenerationResult(success=False, output="", error=str(e))
+
+    async def remove_background(
+        self,
+        image_path: Path,
+        output_path: Path,
+        output_format: str = "png",
+    ) -> GenerationResult:
+        """Remove background from an image using Gemini edit."""
+        try:
+            generator = self._get_generator()
+
+            result = await generator.generate(
+                prompt=(
+                    "Remove the background completely. Keep only the "
+                    "main subject. Make the background transparent "
+                    "or pure white."
+                ),
+                input_images=[str(image_path)],
+                output_images=[str(output_path)],
+            )
+
+            if result.images:
+                if output_format != "png" and output_path.exists():
+                    img = Image.open(str(output_path))
+                    self._save_image(img, output_path, output_format)
+
+                return GenerationResult(
+                    success=True,
+                    output=(f"Background removed. Saved to {output_path}"),
+                    images=result.images,
+                    image_paths=[str(output_path)],
+                    data={"image_path": str(output_path)},
+                )
+            else:
+                return GenerationResult(
+                    success=False,
+                    output="",
+                    error="Background removal failed",
+                )
+
+        except Exception as e:
+            logger.error(f"Background removal failed: {e}", exc_info=True)
+            return GenerationResult(success=False, output="", error=str(e))
+
+    async def _call_text_model_with_image(self, image_path: Path, prompt: str) -> str:
+        """Call text model with a single image + prompt."""
+        from google.genai import types
+
+        client = self._get_genai_client()
+        img = Image.open(str(image_path))
+
+        config = types.GenerateContentConfig(
+            response_modalities=["TEXT"],
+        )
+        response = await client.aio.models.generate_content(
+            model=TEXT_MODEL,
+            contents=[img, prompt],
+            config=config,
+        )
+        if response.candidates and response.candidates[0].content.parts:
+            return response.candidates[0].content.parts[0].text or ""
+        return ""
+
+    # ------------------------------------------------------------------
+    # Info tools
+    # ------------------------------------------------------------------
 
     async def list_models(self) -> GenerationResult:
         """List available generation models with detailed metadata."""
@@ -483,9 +809,9 @@ class ImagenAPIClient:
                     "text_rendering": "excellent",
                     "resolution": "512px/1K/2K/4K",
                     "panoramic_ratios": True,
-                    "reference_inputs": "up to 14 objects + 5 characters",
+                    "reference_inputs": ("up to 14 objects + 5 characters"),
                     "thinking_process": True,
-                    "grounding": "web search + Google Image Search",
+                    "grounding": ("web search + Google Image Search"),
                     "person_generation": True,
                 },
                 "temperature": {
