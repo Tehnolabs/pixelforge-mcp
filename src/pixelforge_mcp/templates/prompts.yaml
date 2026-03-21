@@ -1,0 +1,134 @@
+templates:
+  # Product Photography
+  - name: product_hero
+    category: product_photography
+    template: "Professional product photography of {subject}, studio lighting, clean white background, 4K detail, commercial quality"
+    recommended_model: gemini-3-pro-image-preview
+    recommended_aspect_ratio: "4:3"
+
+  - name: product_lifestyle
+    category: product_photography
+    template: "Lifestyle product shot of {subject} in a modern setting, natural light, bokeh background, editorial style"
+    recommended_aspect_ratio: "3:2"
+
+  - name: product_flat_lay
+    category: product_photography
+    template: "Flat lay photography of {subject}, overhead view, arranged on marble surface, minimalist style, soft shadows"
+    recommended_aspect_ratio: "1:1"
+
+  # Social Media
+  - name: instagram_post
+    category: social_media
+    template: "Eye-catching social media image of {subject}, vibrant colors, trendy aesthetic, Instagram-worthy composition"
+    recommended_aspect_ratio: "1:1"
+
+  - name: story_vertical
+    category: social_media
+    template: "Vertical social media story of {subject}, bold typography space at top, engaging visual, mobile-optimized"
+    recommended_aspect_ratio: "9:16"
+
+  - name: twitter_header
+    category: social_media
+    template: "Professional Twitter/X header banner featuring {subject}, wide format, clean design, brand-friendly"
+    recommended_aspect_ratio: "16:9"
+
+  # Illustration
+  - name: children_book
+    category: illustration
+    template: "Children's book illustration of {subject}, warm colors, friendly style, whimsical details, storybook quality"
+    recommended_aspect_ratio: "4:3"
+
+  - name: concept_art
+    category: illustration
+    template: "Digital concept art of {subject}, detailed environment design, cinematic atmosphere, professional quality"
+    recommended_aspect_ratio: "16:9"
+
+  - name: line_art
+    category: illustration
+    template: "Clean line art illustration of {subject}, black and white, precise strokes, minimal shading, vector style"
+    recommended_aspect_ratio: "1:1"
+
+  - name: watercolor
+    category: illustration
+    template: "Watercolor painting of {subject}, soft washes, organic edges, artistic texture, gallery quality"
+    recommended_aspect_ratio: "3:4"
+
+  # Portrait
+  - name: headshot_professional
+    category: portrait
+    template: "Professional headshot portrait of {subject}, studio lighting, neutral background, sharp focus, corporate quality"
+    recommended_model: gemini-3-pro-image-preview
+    recommended_aspect_ratio: "3:4"
+
+  - name: character_portrait
+    category: portrait
+    template: "Character portrait of {subject}, dramatic lighting, detailed features, cinematic color grading, fantasy style"
+    recommended_aspect_ratio: "3:4"
+
+  # Architecture
+  - name: exterior_photo
+    category: architecture
+    template: "Architectural exterior photograph of {subject}, golden hour lighting, wide angle, professional real estate quality"
+    recommended_aspect_ratio: "16:9"
+
+  - name: interior_design
+    category: architecture
+    template: "Interior design visualization of {subject}, natural light, modern furniture, warm tones, magazine quality"
+    recommended_aspect_ratio: "4:3"
+
+  # Food
+  - name: food_overhead
+    category: food
+    template: "Overhead food photography of {subject}, rustic wooden table, fresh ingredients, natural light, cookbook quality"
+    recommended_aspect_ratio: "1:1"
+
+  - name: food_closeup
+    category: food
+    template: "Close-up food photography of {subject}, shallow depth of field, steam rising, appetizing presentation"
+    recommended_aspect_ratio: "4:5"
+
+  # Fashion
+  - name: fashion_editorial
+    category: fashion
+    template: "Editorial fashion photography of {subject}, high contrast lighting, dramatic pose, Vogue-style composition"
+    recommended_aspect_ratio: "3:4"
+
+  - name: streetwear
+    category: fashion
+    template: "Street style fashion photo of {subject}, urban background, natural pose, authentic feel, candid look"
+    recommended_aspect_ratio: "4:5"
+
+  # Abstract & Art
+  - name: abstract_pattern
+    category: abstract
+    template: "Abstract geometric pattern inspired by {subject}, bold colors, mathematical precision, modern art style"
+    recommended_aspect_ratio: "1:1"
+
+  - name: surreal_scene
+    category: abstract
+    template: "Surrealist artwork of {subject}, dreamlike atmosphere, impossible geometry, Salvador Dali inspired"
+    recommended_aspect_ratio: "3:4"
+
+  # Logo & Branding
+  - name: logo_concept
+    category: logo
+    template: "Minimalist logo concept for {subject}, clean lines, scalable design, professional branding, white background"
+    recommended_aspect_ratio: "1:1"
+
+  - name: icon_set
+    category: logo
+    template: "App icon design for {subject}, rounded corners, flat design, vibrant gradient, iOS/Android style"
+    recommended_aspect_ratio: "1:1"
+
+  # Panoramic
+  - name: landscape_panoramic
+    category: panoramic
+    template: "Panoramic landscape of {subject}, ultra-wide view, dramatic sky, golden hour, National Geographic quality"
+    recommended_model: gemini-3.1-flash-image-preview
+    recommended_aspect_ratio: "4:1"
+
+  - name: city_skyline
+    category: panoramic
+    template: "Panoramic city skyline of {subject}, twilight, city lights reflecting, ultra-wide perspective"
+    recommended_model: gemini-3.1-flash-image-preview
+    recommended_aspect_ratio: "4:1"
