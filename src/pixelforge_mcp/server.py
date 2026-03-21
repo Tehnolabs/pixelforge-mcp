@@ -45,9 +45,12 @@ def get_api_client() -> ImagenAPIClient:
     global _client
     if _client is None:
         config = get_config()
+        api_key = (
+            config.imagen.api_key.get_secret_value() if config.imagen.api_key else None
+        )
         _client = ImagenAPIClient(
             model_name=config.imagen.default_model,
-            api_key=config.imagen.api_key,
+            api_key=api_key,
             log_images=False,
         )
     return _client
@@ -176,6 +179,7 @@ async def generate_image(
         paths = []
         errors = []
 
+        results: list = []
         for i in range(n):
             suffix = f"_{i + 1}" if n > 1 else ""
             if inputs.output_filename and n > 1:
@@ -205,13 +209,29 @@ async def generate_image(
                 reference_images=inputs.reference_images,
                 output_format=inputs.output_format,
             )
+            results.append(result)
 
             if not result.success:
                 errors.append(result.error or "Unknown error")
 
-        response = format_image_result(result, paths)
+        # Aggregate: report success based on ALL results
+        succeeded = [r for r in results if r.success]
+        successful_paths = [p for p, r in zip(paths, results) if r.success]
+
+        if not succeeded:
+            return {
+                "success": False,
+                "message": "All image generations failed",
+                "errors": errors,
+            }
+
+        response = format_image_result(succeeded[0], successful_paths)
         if errors and n > 1:
+            response["partial_failure"] = True
             response["errors"] = errors
+            response["message"] = (
+                f"{len(succeeded)}/{n} images generated" " successfully"
+            )
         return response
 
     except ValidationError as e:
@@ -555,10 +575,17 @@ async def compare_images(
             prompt=inputs.prompt,
         )
 
-        if result.success:
+        if result.success and result.data:
+            data = result.data
             return {
                 "success": True,
-                "comparison": result.data.get("analysis", result.output),
+                "comparison": data.get("analysis", result.output),
+                "image_count": len(inputs.image_paths),
+            }
+        elif result.success:
+            return {
+                "success": True,
+                "comparison": result.output,
                 "image_count": len(inputs.image_paths),
             }
         else:
@@ -804,7 +831,6 @@ def get_server_info() -> dict:
         },
         "storage": {
             "output_directory": str(config.storage.output_dir),
-            "use_s3": config.storage.use_s3,
         },
         "imagen": {
             "default_model": config.imagen.default_model,
