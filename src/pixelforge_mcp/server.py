@@ -16,14 +16,17 @@ from .utils.validation import (
     FORMAT_EXTENSIONS,
     QUALITY_PRESETS,
     AnalyzeImageInput,
+    ApplyTemplateInput,
     CompareImagesInput,
     DetectObjectsInput,
     EditImageInput,
     EstimateCostInput,
     ExtractTextInput,
     GenerateImageInput,
+    ListTemplatesInput,
     OptimizePromptInput,
     RemoveBackgroundInput,
+    TransformImageInput,
 )
 
 # Configure logging
@@ -415,6 +418,151 @@ async def remove_background(
         }
 
 
+@mcp.tool()
+async def transform_image(
+    image_path: str,
+    operation: str,
+    output_filename: Optional[str] = None,
+    output_format: str = "png",
+    x: Optional[int] = None,
+    y: Optional[int] = None,
+    width: Optional[int] = None,
+    height: Optional[int] = None,
+    maintain_aspect: bool = True,
+    degrees: Optional[float] = None,
+    direction: Optional[str] = None,
+    radius: float = 2.0,
+    factor: float = 2.0,
+    text: Optional[str] = None,
+    position: str = "bottom-right",
+    opacity: float = 0.5,
+) -> dict:
+    """Transform an image using Pillow operations.
+
+    Args:
+        image_path: Path to the image to transform
+        operation: One of: crop, resize, rotate, flip, blur, sharpen,
+            grayscale, watermark
+        output_filename: Custom output filename (optional)
+        output_format: Output format (png, jpeg, webp)
+        x, y: Crop offset coordinates
+        width, height: Dimensions for crop/resize
+        maintain_aspect: Keep aspect ratio when resizing (default: True)
+        degrees: Rotation angle in degrees
+        direction: Flip direction ('horizontal' or 'vertical')
+        radius: Blur radius (default: 2.0)
+        factor: Sharpness factor (default: 2.0, >1 = sharper)
+        text: Watermark text
+        position: Watermark position (default: 'bottom-right')
+        opacity: Watermark opacity 0.0-1.0 (default: 0.5)
+
+    Returns:
+        Dictionary with transform result and output path
+    """
+    logger.info(f"Transforming image: {operation}")
+
+    try:
+        inputs = TransformImageInput(
+            image_path=image_path,
+            operation=operation,
+            output_filename=output_filename,
+            output_format=output_format,
+            x=x,
+            y=y,
+            width=width,
+            height=height,
+            maintain_aspect=maintain_aspect,
+            degrees=degrees,
+            direction=direction,
+            radius=radius,
+            factor=factor,
+            text=text,
+            position=position,
+            opacity=opacity,
+        )
+
+        from PIL import Image as PILImage
+
+        from pixelforge_mcp.utils import transforms
+
+        img = PILImage.open(inputs.image_path)
+
+        # Dispatch to the correct transform function
+        op = inputs.operation
+        if op == "crop":
+            if (
+                inputs.x is None
+                or inputs.y is None
+                or inputs.width is None
+                or inputs.height is None
+            ):
+                return {
+                    "success": False,
+                    "message": "crop requires x, y, width, height",
+                }
+            img = transforms.crop(img, inputs.x, inputs.y, inputs.width, inputs.height)
+        elif op == "resize":
+            if inputs.width is None or inputs.height is None:
+                return {
+                    "success": False,
+                    "message": "resize requires width and height",
+                }
+            img = transforms.resize(
+                img, inputs.width, inputs.height, inputs.maintain_aspect
+            )
+        elif op == "rotate":
+            if inputs.degrees is None:
+                return {
+                    "success": False,
+                    "message": "rotate requires degrees",
+                }
+            img = transforms.rotate(img, inputs.degrees)
+        elif op == "flip":
+            if inputs.direction is None:
+                return {
+                    "success": False,
+                    "message": "flip requires direction",
+                }
+            img = transforms.flip(img, inputs.direction)
+        elif op == "blur":
+            img = transforms.blur(img, inputs.radius)
+        elif op == "sharpen":
+            img = transforms.sharpen(img, inputs.factor)
+        elif op == "grayscale":
+            img = transforms.grayscale(img)
+        elif op == "watermark":
+            if inputs.text is None:
+                return {
+                    "success": False,
+                    "message": "watermark requires text",
+                }
+            img = transforms.watermark(
+                img, inputs.text, inputs.position, inputs.opacity
+            )
+
+        # Save result
+        output_path = generate_output_path(
+            filename=inputs.output_filename,
+            prefix=f"transformed_{op}",
+            output_format=inputs.output_format,
+        )
+        ImagenAPIClient._save_image(img, output_path, inputs.output_format)
+
+        return {
+            "success": True,
+            "message": f"Image {op} applied successfully",
+            "output_path": str(output_path.absolute()),
+            "operation": op,
+            "size_bytes": output_path.stat().st_size,
+        }
+
+    except ValidationError as e:
+        return {"success": False, "message": f"Invalid input: {e}"}
+    except Exception as e:
+        logger.error(f"Transform error: {e}", exc_info=True)
+        return {"success": False, "message": f"Transform failed: {e}"}
+
+
 # ------------------------------------------------------------------
 # Analysis tools
 # ------------------------------------------------------------------
@@ -704,6 +852,100 @@ async def optimize_prompt(prompt: str, style: Optional[str] = None) -> dict:
 
 
 @mcp.tool()
+async def list_templates(
+    category: Optional[str] = None,
+) -> dict:
+    """List available prompt templates for image generation.
+
+    Args:
+        category: Filter by category (product_photography, social_media,
+            illustration, portrait, architecture, food, fashion,
+            abstract, logo, panoramic). Omit for all.
+
+    Returns:
+        Dictionary with template list and categories
+    """
+    try:
+        inputs = ListTemplatesInput(category=category)
+
+        from pixelforge_mcp.utils.templates import get_template_library
+
+        library = get_template_library()
+
+        templates = library.list_templates(category=inputs.category)
+        categories = library.list_categories()
+
+        return {
+            "success": True,
+            "templates": templates,
+            "count": len(templates),
+            "categories": categories,
+            "filter": inputs.category,
+        }
+    except ValidationError as e:
+        return {"success": False, "message": f"Invalid input: {e}"}
+    except Exception as e:
+        logger.error(f"Template listing failed: {e}", exc_info=True)
+        return {"success": False, "message": str(e)}
+
+
+@mcp.tool()
+async def apply_template(
+    template_name: str,
+    subject: str,
+) -> dict:
+    """Apply a prompt template with a subject to generate a ready-to-use prompt.
+
+    Args:
+        template_name: Name of the template (e.g., 'product_hero',
+            'instagram_post'). Use list_templates() to see all.
+        subject: The subject to fill into the template
+            (e.g., 'wireless headphones', 'coffee shop')
+
+    Returns:
+        Dictionary with rendered prompt and recommendations
+
+    Example:
+        apply_template(
+            template_name="product_hero",
+            subject="wireless headphones"
+        )
+    """
+    try:
+        inputs = ApplyTemplateInput(
+            template_name=template_name,
+            subject=subject,
+        )
+
+        from pixelforge_mcp.utils.templates import get_template_library
+
+        library = get_template_library()
+
+        result = library.apply_template(
+            inputs.template_name,
+            {"subject": inputs.subject},
+        )
+
+        if result:
+            return {
+                "success": True,
+                **result,
+            }
+        else:
+            available = [t["name"] for t in library.list_templates()]
+            return {
+                "success": False,
+                "message": f"Template '{inputs.template_name}' not found",
+                "available_templates": available,
+            }
+    except ValidationError as e:
+        return {"success": False, "message": f"Invalid input: {e}"}
+    except Exception as e:
+        logger.error(f"Template application failed: {e}", exc_info=True)
+        return {"success": False, "message": str(e)}
+
+
+@mcp.tool()
 async def estimate_cost(
     operation: str,
     model: Optional[str] = None,
@@ -879,6 +1121,7 @@ def get_server_info() -> dict:
                 "generate_image",
                 "edit_image",
                 "remove_background",
+                "transform_image",
             ],
             "analysis": [
                 "analyze_image",
@@ -888,6 +1131,8 @@ def get_server_info() -> dict:
             ],
             "utility": [
                 "optimize_prompt",
+                "list_templates",
+                "apply_template",
                 "estimate_cost",
                 "list_available_models",
                 "get_server_info",
@@ -903,8 +1148,11 @@ def get_server_info() -> dict:
             "ocr": "Text extraction from images",
             "object_detection": "Bounding box detection",
             "background_removal": "Subject isolation",
+            "image_transforms": "Crop, resize, rotate, flip, "
+            "blur, sharpen, grayscale, watermark",
             "image_comparison": "Multi-image analysis",
             "cost_estimation": "Per-operation pricing",
+            "prompt_templates": "Curated templates with " "model/ratio recommendations",
         },
     }
 

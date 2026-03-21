@@ -465,6 +465,80 @@ class RemoveBackgroundInput(BaseModel):
         return _validate_output_format(v)
 
 
+# Supported image transform operations
+TRANSFORM_OPERATIONS = [
+    "crop",
+    "resize",
+    "rotate",
+    "flip",
+    "blur",
+    "sharpen",
+    "grayscale",
+    "watermark",
+]
+
+
+class TransformImageInput(BaseModel):
+    """Input validation for image transformations."""
+
+    image_path: str = Field(..., description="Path to the image to transform")
+    operation: str = Field(
+        ...,
+        description="Transform operation: crop, resize, rotate, flip, "
+        "blur, sharpen, grayscale, or watermark",
+    )
+    output_filename: Optional[str] = Field(
+        None, description="Custom filename for the result"
+    )
+    output_format: str = Field("png", description="Output format: png, jpeg, or webp")
+
+    # Operation-specific parameters
+    x: Optional[int] = Field(None, description="Crop: x offset")
+    y: Optional[int] = Field(None, description="Crop: y offset")
+    width: Optional[int] = Field(None, description="Crop/resize: width in pixels")
+    height: Optional[int] = Field(None, description="Crop/resize: height in pixels")
+    maintain_aspect: bool = Field(True, description="Resize: maintain aspect ratio")
+    degrees: Optional[float] = Field(None, description="Rotate: degrees")
+    direction: Optional[str] = Field(
+        None, description="Flip: 'horizontal' or 'vertical'"
+    )
+    radius: float = Field(2.0, description="Blur: radius")
+    factor: float = Field(2.0, description="Sharpen: factor (>1 = sharper)")
+    text: Optional[str] = Field(None, description="Watermark: text to overlay")
+    position: str = Field(
+        "bottom-right",
+        description="Watermark position: top-left, top-right, "
+        "bottom-left, bottom-right, center",
+    )
+    opacity: float = Field(0.5, description="Watermark opacity (0.0-1.0)")
+
+    @field_validator("image_path")
+    @classmethod
+    def validate_image_path(cls, v: str) -> str:
+        return _validate_image_path(v)
+
+    @field_validator("output_filename")
+    @classmethod
+    def validate_filename(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_output_filename(v)
+
+    @field_validator("output_format")
+    @classmethod
+    def validate_output_format(cls, v: str) -> str:
+        return _validate_output_format(v)
+
+    @field_validator("operation")
+    @classmethod
+    def validate_operation(cls, v: str) -> str:
+        v = v.lower()
+        if v not in TRANSFORM_OPERATIONS:
+            raise ValueError(
+                f"Invalid operation. "
+                f"Must be one of: {', '.join(TRANSFORM_OPERATIONS)}"
+            )
+        return v
+
+
 # ---------------------------------------------------------------------------
 # Utility tools
 # ---------------------------------------------------------------------------
@@ -521,4 +595,45 @@ class EstimateCostInput(BaseModel):
             raise ValueError(
                 "Invalid operation. " "Must be one of: generate, edit, analyze"
             )
+        return v
+
+
+# ---------------------------------------------------------------------------
+# Template tools
+# ---------------------------------------------------------------------------
+
+
+class ListTemplatesInput(BaseModel):
+    """Input validation for listing templates."""
+
+    category: Optional[str] = Field(
+        None,
+        description="Filter by category: product_photography, social_media, "
+        "illustration, portrait, architecture, food, fashion, "
+        "abstract, logo, panoramic",
+    )
+
+
+class ApplyTemplateInput(BaseModel):
+    """Input validation for applying a template."""
+
+    template_name: str = Field(..., description="Template name (e.g., 'product_hero')")
+    subject: str = Field(..., description="The subject to fill into the template")
+
+    @field_validator("template_name")
+    @classmethod
+    def validate_template_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Template name cannot be empty")
+        return v
+
+    @field_validator("subject")
+    @classmethod
+    def validate_subject(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Subject cannot be empty")
+        if len(v) > 500:
+            raise ValueError("Subject too long (max 500 characters)")
         return v

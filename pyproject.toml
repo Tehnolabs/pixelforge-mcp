@@ -1,6 +1,6 @@
 [project]
 name = "pixelforge-mcp"
-version = "0.3.1"
+version = "0.4.0"
 description = "AI-powered image generation MCP server with multi-model support"
 authors = [{name = "Ahmed Al-Eryani", email = "ahmed@tehnolabs.com"}]
 readme = "README.md"
@@ -46,6 +46,9 @@ Repository = "https://github.com/tehnolabs/pixelforge-mcp"
 
 [project.scripts]
 pixelforge-mcp = "pixelforge_mcp.server:main"
+
+[tool.setuptools.package-data]
+pixelforge_mcp = ["templates/*.yaml"]
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
