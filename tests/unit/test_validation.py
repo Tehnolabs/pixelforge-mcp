@@ -422,6 +422,54 @@ class TestEditImageInput:
                 output_format="bmp",
             )
 
+    def test_edit_filename_path_traversal(self, tmp_path):
+        """Test path traversal in edit output_filename is rejected."""
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        with pytest.raises(ValidationError, match="cannot contain path separators"):
+            EditImageInput(
+                prompt="add clouds",
+                input_image_path=str(image_path),
+                output_filename="../evil.png",
+            )
+
+    def test_edit_filename_with_slash(self, tmp_path):
+        """Test slash in edit output_filename is rejected."""
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        with pytest.raises(ValidationError, match="cannot contain path separators"):
+            EditImageInput(
+                prompt="add clouds",
+                input_image_path=str(image_path),
+                output_filename="dir/evil.png",
+            )
+
+    def test_edit_filename_special_chars(self, tmp_path):
+        """Test special characters in edit output_filename are rejected."""
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        with pytest.raises(ValidationError, match="can only contain"):
+            EditImageInput(
+                prompt="add clouds",
+                input_image_path=str(image_path),
+                output_filename="test@file.png",
+            )
+
+    def test_edit_filename_valid(self, tmp_path):
+        """Test valid edit output_filename is accepted."""
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        input_data = EditImageInput(
+            prompt="add clouds",
+            input_image_path=str(image_path),
+            output_filename="my_image.png",
+        )
+        assert input_data.output_filename == "my_image.png"
+
 
 class TestAnalyzeImageInput:
     """Tests for AnalyzeImageInput validation."""
@@ -753,6 +801,50 @@ class TestRemoveBackgroundInput:
         """Test non-existent image is rejected."""
         with pytest.raises(ValidationError, match="not found"):
             RemoveBackgroundInput(image_path="/nonexistent.png")
+
+    def test_removebg_filename_path_traversal(self, tmp_path):
+        """Test path traversal in remove background output_filename is rejected."""
+        img = tmp_path / "product.jpg"
+        img.touch()
+
+        with pytest.raises(ValidationError, match="cannot contain path separators"):
+            RemoveBackgroundInput(
+                image_path=str(img),
+                output_filename="../evil.png",
+            )
+
+    def test_removebg_filename_with_slash(self, tmp_path):
+        """Test slash in remove background output_filename is rejected."""
+        img = tmp_path / "product.jpg"
+        img.touch()
+
+        with pytest.raises(ValidationError, match="cannot contain path separators"):
+            RemoveBackgroundInput(
+                image_path=str(img),
+                output_filename="dir/evil.png",
+            )
+
+    def test_removebg_filename_special_chars(self, tmp_path):
+        """Test special characters in remove background output_filename are rejected."""
+        img = tmp_path / "product.jpg"
+        img.touch()
+
+        with pytest.raises(ValidationError, match="can only contain"):
+            RemoveBackgroundInput(
+                image_path=str(img),
+                output_filename="test@file.png",
+            )
+
+    def test_removebg_filename_valid(self, tmp_path):
+        """Test valid remove background output_filename is accepted."""
+        img = tmp_path / "product.jpg"
+        img.touch()
+
+        data = RemoveBackgroundInput(
+            image_path=str(img),
+            output_filename="my_image.png",
+        )
+        assert data.output_filename == "my_image.png"
 
 
 class TestEstimateCostInput:

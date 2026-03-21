@@ -118,6 +118,31 @@ def _validate_optional_prompt(v: Optional[str]) -> Optional[str]:
     return _validate_prompt_text(v)
 
 
+def _validate_output_filename(v: Optional[str]) -> Optional[str]:
+    """Validate an output filename (no path traversal, safe characters only)."""
+    if v is None:
+        return v
+    if ".." in v or "/" in v or "\\" in v:
+        raise ValueError("Filename cannot contain path separators")
+    if not re.match(r"^[a-zA-Z0-9_\-\.]+$", v):
+        raise ValueError(
+            "Filename can only contain letters, numbers, " "underscore, hyphen, and dot"
+        )
+    if not v.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+        v = v + ".png"
+    return v
+
+
+def _validate_output_format(v: str) -> str:
+    """Validate output format (png, jpeg, webp)."""
+    v = v.lower()
+    if v not in OUTPUT_FORMATS:
+        raise ValueError(
+            f"Invalid output format. " f"Must be one of: {', '.join(OUTPUT_FORMATS)}"
+        )
+    return v
+
+
 # ---------------------------------------------------------------------------
 # Generation tools
 # ---------------------------------------------------------------------------
@@ -192,18 +217,7 @@ class GenerateImageInput(BaseModel):
     @field_validator("output_filename")
     @classmethod
     def validate_filename(cls, v: Optional[str]) -> Optional[str]:
-        if v is None:
-            return v
-        if ".." in v or "/" in v or "\\" in v:
-            raise ValueError("Filename cannot contain path separators")
-        if not re.match(r"^[a-zA-Z0-9_\-\.]+$", v):
-            raise ValueError(
-                "Filename can only contain letters, numbers, "
-                "underscore, hyphen, and dot"
-            )
-        if not v.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
-            v = v + ".png"
-        return v
+        return _validate_output_filename(v)
 
     @field_validator("image_size")
     @classmethod
@@ -220,13 +234,7 @@ class GenerateImageInput(BaseModel):
     @field_validator("output_format")
     @classmethod
     def validate_output_format(cls, v: str) -> str:
-        v = v.lower()
-        if v not in OUTPUT_FORMATS:
-            raise ValueError(
-                f"Invalid output format. "
-                f"Must be one of: {', '.join(OUTPUT_FORMATS)}"
-            )
-        return v
+        return _validate_output_format(v)
 
     @field_validator("person_generation")
     @classmethod
@@ -284,16 +292,15 @@ class EditImageInput(BaseModel):
     def validate_input_path(cls, v: str) -> str:
         return _validate_image_path(v)
 
+    @field_validator("output_filename")
+    @classmethod
+    def validate_filename(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_output_filename(v)
+
     @field_validator("output_format")
     @classmethod
     def validate_output_format(cls, v: str) -> str:
-        v = v.lower()
-        if v not in OUTPUT_FORMATS:
-            raise ValueError(
-                f"Invalid output format. "
-                f"Must be one of: {', '.join(OUTPUT_FORMATS)}"
-            )
-        return v
+        return _validate_output_format(v)
 
 
 # ---------------------------------------------------------------------------
@@ -395,16 +402,15 @@ class RemoveBackgroundInput(BaseModel):
     def validate_image_path(cls, v: str) -> str:
         return _validate_image_path(v)
 
+    @field_validator("output_filename")
+    @classmethod
+    def validate_filename(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_output_filename(v)
+
     @field_validator("output_format")
     @classmethod
     def validate_output_format(cls, v: str) -> str:
-        v = v.lower()
-        if v not in OUTPUT_FORMATS:
-            raise ValueError(
-                f"Invalid output format. "
-                f"Must be one of: {', '.join(OUTPUT_FORMATS)}"
-            )
-        return v
+        return _validate_output_format(v)
 
 
 # ---------------------------------------------------------------------------
