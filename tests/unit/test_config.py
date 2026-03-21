@@ -75,7 +75,7 @@ class TestServerConfig:
         """Test ServerConfig uses correct defaults."""
         config = ServerConfig()
         assert config.name == "gemini-imagen-mcp"
-        assert config.version == "0.4.0"
+        assert config.version == "0.5.0"
         assert config.log_level == "INFO"
 
 

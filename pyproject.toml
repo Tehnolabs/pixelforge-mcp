@@ -1,6 +1,6 @@
 [project]
 name = "pixelforge-mcp"
-version = "0.4.0"
+version = "0.5.0"
 description = "AI-powered image generation MCP server with multi-model support"
 authors = [{name = "Ahmed Al-Eryani", email = "ahmed@tehnolabs.com"}]
 readme = "README.md"
@@ -37,6 +37,9 @@ dev = [
     "black>=23.0.0",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
+]
+vertex = [
+    "google-cloud-aiplatform>=1.38.0",
 ]
 
 [project.urls]

@@ -64,8 +64,16 @@ class ServerConfig(BaseModel):
     """MCP server configuration."""
 
     name: str = Field("gemini-imagen-mcp", description="Server name")
-    version: str = Field("0.4.0", description="Server version")
+    version: str = Field("0.5.0", description="Server version")
     log_level: str = Field("INFO", description="Logging level")
+
+
+class VertexConfig(BaseModel):
+    """Optional Vertex AI configuration for advanced features."""
+
+    project_id: Optional[str] = Field(None, description="Google Cloud project ID")
+    location: str = Field("us-central1", description="Vertex AI region")
+    enabled: bool = Field(False, description="Whether Vertex AI features are enabled")
 
 
 class Config(BaseModel):
@@ -74,6 +82,7 @@ class Config(BaseModel):
     imagen: ImagenConfig = Field(default_factory=ImagenConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
+    vertex: VertexConfig = Field(default_factory=VertexConfig)
 
     @classmethod
     def load(cls, config_path: Optional[Path] = None) -> "Config":
@@ -97,6 +106,12 @@ class Config(BaseModel):
         )
         if api_key:
             config_data.setdefault("imagen", {})["api_key"] = api_key
+
+        # Auto-detect Vertex AI
+        project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
+        if project_id:
+            config_data.setdefault("vertex", {})["project_id"] = project_id
+            config_data["vertex"]["enabled"] = True
 
         return cls(**config_data)
 
