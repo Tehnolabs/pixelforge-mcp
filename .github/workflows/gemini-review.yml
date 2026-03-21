@@ -37,7 +37,7 @@ jobs:
             {
               "model": {
                 "modelName": "gemini-3.1-pro-preview",
-                "maxSessionTurns": 25
+                "maxSessionTurns": 50
               },
               "mcpServers": {
                 "github": {
