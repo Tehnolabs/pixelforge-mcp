@@ -49,6 +49,7 @@ output/
 
 # Allow doc assets
 !docs/assets/**
+!demo/assets/**
 
 # Testing
 .pytest_cache/
@@ -69,3 +70,9 @@ gha-creds-*.json
 
 # MyPy
 .mypy_cache/
+
+# Worktrees
+.worktrees/
+
+# Demo / scratch
+demo/
