@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # Supported aspect ratios
 ASPECT_RATIOS = [
@@ -83,6 +83,31 @@ COST_TABLE = {
         "edit": 0.04,
         "analyze": 0.01,
     },
+    "imagen-4.0-generate-001": {
+        "generate": 0.04,
+    },
+    "imagen-4.0-ultra-generate-001": {
+        "generate": 0.06,
+    },
+    "imagen-4.0-fast-generate-001": {
+        "generate": 0.02,
+    },
+}
+
+# Quality presets map to model + image_size combinations
+QUALITY_PRESETS = {
+    "fast": {
+        "model": "gemini-2.5-flash-image",
+        "image_size": None,
+    },
+    "balanced": {
+        "model": "gemini-3.1-flash-image-preview",
+        "image_size": "1K",
+    },
+    "quality": {
+        "model": "gemini-3-pro-image-preview",
+        "image_size": "2K",
+    },
 }
 
 # Valid image file extensions
@@ -118,6 +143,31 @@ def _validate_optional_prompt(v: Optional[str]) -> Optional[str]:
     return _validate_prompt_text(v)
 
 
+def _validate_output_filename(v: Optional[str]) -> Optional[str]:
+    """Validate an output filename (no path traversal, safe characters only)."""
+    if v is None:
+        return v
+    if ".." in v or "/" in v or "\\" in v:
+        raise ValueError("Filename cannot contain path separators")
+    if not re.match(r"^[a-zA-Z0-9_\-\.]+$", v):
+        raise ValueError(
+            "Filename can only contain letters, numbers, " "underscore, hyphen, and dot"
+        )
+    if not v.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+        v = v + ".png"
+    return v
+
+
+def _validate_output_format(v: str) -> str:
+    """Validate output format (png, jpeg, webp)."""
+    v = v.lower()
+    if v not in OUTPUT_FORMATS:
+        raise ValueError(
+            f"Invalid output format. " f"Must be one of: {', '.join(OUTPUT_FORMATS)}"
+        )
+    return v
+
+
 # ---------------------------------------------------------------------------
 # Generation tools
 # ---------------------------------------------------------------------------
@@ -142,6 +192,12 @@ class GenerateImageInput(BaseModel):
     )
     model: Optional[str] = Field(
         None, description="Model to use (default: gemini-2.5-flash-image)"
+    )
+    quality: Optional[str] = Field(
+        None,
+        description="Quality preset: 'fast' (cheapest, fastest), "
+        "'balanced' (good quality, fast), or 'quality' (best output). "
+        "Mutually exclusive with 'model'.",
     )
     safety_setting: str = Field(
         "preset:strict",
@@ -174,6 +230,13 @@ class GenerateImageInput(BaseModel):
         "consistency. Up to 14 images. Gemini 3.1 Flash supports "
         "10 object + 4 character references.",
     )
+    thinking_budget: Optional[int] = Field(
+        None,
+        description="Thinking budget for extended reasoning (0-24576 tokens). "
+        "Higher values = deeper reasoning. Only for Gemini models.",
+        ge=0,
+        le=24576,
+    )
 
     @field_validator("prompt")
     @classmethod
@@ -192,18 +255,7 @@ class GenerateImageInput(BaseModel):
     @field_validator("output_filename")
     @classmethod
     def validate_filename(cls, v: Optional[str]) -> Optional[str]:
-        if v is None:
-            return v
-        if ".." in v or "/" in v or "\\" in v:
-            raise ValueError("Filename cannot contain path separators")
-        if not re.match(r"^[a-zA-Z0-9_\-\.]+$", v):
-            raise ValueError(
-                "Filename can only contain letters, numbers, "
-                "underscore, hyphen, and dot"
-            )
-        if not v.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
-            v = v + ".png"
-        return v
+        return _validate_output_filename(v)
 
     @field_validator("image_size")
     @classmethod
@@ -220,13 +272,7 @@ class GenerateImageInput(BaseModel):
     @field_validator("output_format")
     @classmethod
     def validate_output_format(cls, v: str) -> str:
-        v = v.lower()
-        if v not in OUTPUT_FORMATS:
-            raise ValueError(
-                f"Invalid output format. "
-                f"Must be one of: {', '.join(OUTPUT_FORMATS)}"
-            )
-        return v
+        return _validate_output_format(v)
 
     @field_validator("person_generation")
     @classmethod
@@ -251,6 +297,27 @@ class GenerateImageInput(BaseModel):
         if len(v) == 0:
             return None
         return [_validate_image_path(p) for p in v]
+
+    @field_validator("quality")
+    @classmethod
+    def validate_quality(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.lower()
+        if v not in QUALITY_PRESETS:
+            raise ValueError(
+                f"Invalid quality preset. "
+                f"Must be one of: {', '.join(QUALITY_PRESETS)}"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def check_quality_model_exclusive(self):
+        if self.quality and self.model:
+            raise ValueError(
+                "'quality' and 'model' are mutually " "exclusive. Use one or the other."
+            )
+        return self
 
 
 class EditImageInput(BaseModel):
@@ -284,16 +351,15 @@ class EditImageInput(BaseModel):
     def validate_input_path(cls, v: str) -> str:
         return _validate_image_path(v)
 
+    @field_validator("output_filename")
+    @classmethod
+    def validate_filename(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_output_filename(v)
+
     @field_validator("output_format")
     @classmethod
     def validate_output_format(cls, v: str) -> str:
-        v = v.lower()
-        if v not in OUTPUT_FORMATS:
-            raise ValueError(
-                f"Invalid output format. "
-                f"Must be one of: {', '.join(OUTPUT_FORMATS)}"
-            )
-        return v
+        return _validate_output_format(v)
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +374,11 @@ class AnalyzeImageInput(BaseModel):
     prompt: Optional[str] = Field(
         None,
         description="Custom analysis prompt (default: general description)",
+    )
+    use_grounding: bool = Field(
+        False,
+        description="Enable Google Search grounding for more accurate, "
+        "factual analysis results",
     )
 
     @field_validator("prompt")
@@ -325,6 +396,11 @@ class ExtractTextInput(BaseModel):
     """Input validation for OCR / text extraction."""
 
     image_path: str = Field(..., description="Path to the image to extract text from")
+    use_grounding: bool = Field(
+        False,
+        description="Enable Google Search grounding for more accurate, "
+        "factual analysis results",
+    )
 
     @field_validator("image_path")
     @classmethod
@@ -340,6 +416,11 @@ class DetectObjectsInput(BaseModel):
         None,
         description="Specific objects to detect (e.g. 'cats and dogs'). "
         "If not provided, detects all visible objects.",
+    )
+    use_grounding: bool = Field(
+        False,
+        description="Enable Google Search grounding for more accurate, "
+        "factual analysis results",
     )
 
     @field_validator("image_path")
@@ -358,6 +439,11 @@ class CompareImagesInput(BaseModel):
         None,
         description="Comparison focus (e.g. 'color differences', "
         "'layout changes'). Default: general comparison.",
+    )
+    use_grounding: bool = Field(
+        False,
+        description="Enable Google Search grounding for more accurate, "
+        "factual analysis results",
     )
 
     @field_validator("prompt")
@@ -395,14 +481,87 @@ class RemoveBackgroundInput(BaseModel):
     def validate_image_path(cls, v: str) -> str:
         return _validate_image_path(v)
 
+    @field_validator("output_filename")
+    @classmethod
+    def validate_filename(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_output_filename(v)
+
     @field_validator("output_format")
     @classmethod
     def validate_output_format(cls, v: str) -> str:
+        return _validate_output_format(v)
+
+
+# Supported image transform operations
+TRANSFORM_OPERATIONS = [
+    "crop",
+    "resize",
+    "rotate",
+    "flip",
+    "blur",
+    "sharpen",
+    "grayscale",
+    "watermark",
+]
+
+
+class TransformImageInput(BaseModel):
+    """Input validation for image transformations."""
+
+    image_path: str = Field(..., description="Path to the image to transform")
+    operation: str = Field(
+        ...,
+        description="Transform operation: crop, resize, rotate, flip, "
+        "blur, sharpen, grayscale, or watermark",
+    )
+    output_filename: Optional[str] = Field(
+        None, description="Custom filename for the result"
+    )
+    output_format: str = Field("png", description="Output format: png, jpeg, or webp")
+
+    # Operation-specific parameters
+    x: Optional[int] = Field(None, description="Crop: x offset")
+    y: Optional[int] = Field(None, description="Crop: y offset")
+    width: Optional[int] = Field(None, description="Crop/resize: width in pixels")
+    height: Optional[int] = Field(None, description="Crop/resize: height in pixels")
+    maintain_aspect: bool = Field(True, description="Resize: maintain aspect ratio")
+    degrees: Optional[float] = Field(None, description="Rotate: degrees")
+    direction: Optional[str] = Field(
+        None, description="Flip: 'horizontal' or 'vertical'"
+    )
+    radius: float = Field(2.0, description="Blur: radius")
+    factor: float = Field(2.0, description="Sharpen: factor (>1 = sharper)")
+    text: Optional[str] = Field(None, description="Watermark: text to overlay")
+    position: str = Field(
+        "bottom-right",
+        description="Watermark position: top-left, top-right, "
+        "bottom-left, bottom-right, center",
+    )
+    opacity: float = Field(0.5, description="Watermark opacity (0.0-1.0)")
+
+    @field_validator("image_path")
+    @classmethod
+    def validate_image_path(cls, v: str) -> str:
+        return _validate_image_path(v)
+
+    @field_validator("output_filename")
+    @classmethod
+    def validate_filename(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_output_filename(v)
+
+    @field_validator("output_format")
+    @classmethod
+    def validate_output_format(cls, v: str) -> str:
+        return _validate_output_format(v)
+
+    @field_validator("operation")
+    @classmethod
+    def validate_operation(cls, v: str) -> str:
         v = v.lower()
-        if v not in OUTPUT_FORMATS:
+        if v not in TRANSFORM_OPERATIONS:
             raise ValueError(
-                f"Invalid output format. "
-                f"Must be one of: {', '.join(OUTPUT_FORMATS)}"
+                f"Invalid operation. "
+                f"Must be one of: {', '.join(TRANSFORM_OPERATIONS)}"
             )
         return v
 
@@ -464,3 +623,139 @@ class EstimateCostInput(BaseModel):
                 "Invalid operation. " "Must be one of: generate, edit, analyze"
             )
         return v
+
+
+# ---------------------------------------------------------------------------
+# Template tools
+# ---------------------------------------------------------------------------
+
+
+class ListTemplatesInput(BaseModel):
+    """Input validation for listing templates."""
+
+    category: Optional[str] = Field(
+        None,
+        description="Filter by category: product_photography, social_media, "
+        "illustration, portrait, architecture, food, fashion, "
+        "abstract, logo, panoramic",
+    )
+
+
+class ApplyTemplateInput(BaseModel):
+    """Input validation for applying a template."""
+
+    template_name: str = Field(..., description="Template name (e.g., 'product_hero')")
+    subject: str = Field(..., description="The subject to fill into the template")
+
+    @field_validator("template_name")
+    @classmethod
+    def validate_template_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Template name cannot be empty")
+        return v
+
+    @field_validator("subject")
+    @classmethod
+    def validate_subject(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Subject cannot be empty")
+        if len(v) > 500:
+            raise ValueError("Subject too long (max 500 characters)")
+        return v
+
+
+# ---------------------------------------------------------------------------
+# Vertex AI tools (optional, requires google-cloud-aiplatform)
+# ---------------------------------------------------------------------------
+
+
+class UpscaleImageInput(BaseModel):
+    """Input validation for image upscaling (Vertex AI only)."""
+
+    image_path: str = Field(..., description="Path to the image to upscale")
+    upscale_factor: str = Field("x2", description="Upscale factor: 'x2' or 'x4'")
+    output_filename: Optional[str] = Field(None, description="Custom output filename")
+    output_format: str = Field("png", description="Output format")
+
+    @field_validator("image_path")
+    @classmethod
+    def validate_image_path(cls, v: str) -> str:
+        return _validate_image_path(v)
+
+    @field_validator("upscale_factor")
+    @classmethod
+    def validate_upscale_factor(cls, v: str) -> str:
+        v = v.lower()
+        if v not in ("x2", "x4"):
+            raise ValueError("Upscale factor must be 'x2' or 'x4'")
+        return v
+
+    @field_validator("output_filename")
+    @classmethod
+    def validate_filename(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_output_filename(v)
+
+    @field_validator("output_format")
+    @classmethod
+    def validate_output_format(cls, v: str) -> str:
+        return _validate_output_format(v)
+
+
+ADVANCED_EDIT_MODES = [
+    "inpaint_removal",
+    "inpaint_insertion",
+    "outpaint",
+    "background_swap",
+    "style_transfer",
+    "product_image",
+]
+
+
+class AdvancedEditInput(BaseModel):
+    """Input validation for advanced editing (Vertex AI only)."""
+
+    image_path: str = Field(..., description="Path to the image to edit")
+    prompt: str = Field(..., description="Edit instruction")
+    edit_mode: str = Field(
+        ...,
+        description="Edit mode: inpaint_removal, inpaint_insertion, "
+        "outpaint, background_swap, style_transfer, product_image",
+    )
+    mask_path: Optional[str] = Field(
+        None, description="Path to mask image (for inpainting)"
+    )
+    output_filename: Optional[str] = Field(None, description="Custom output filename")
+    output_format: str = Field("png", description="Output format")
+
+    @field_validator("image_path")
+    @classmethod
+    def validate_image_path(cls, v: str) -> str:
+        return _validate_image_path(v)
+
+    @field_validator("prompt")
+    @classmethod
+    def validate_prompt(cls, v: str) -> str:
+        return _validate_prompt_text(v)
+
+    @field_validator("edit_mode")
+    @classmethod
+    def validate_edit_mode(cls, v: str) -> str:
+        v = v.lower()
+        if v not in ADVANCED_EDIT_MODES:
+            raise ValueError(
+                f"Invalid edit mode. "
+                f"Must be one of: {', '.join(ADVANCED_EDIT_MODES)}"
+            )
+        return v
+
+    @field_validator("output_filename")
+    @classmethod
+    def validate_filename(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_output_filename(v)
+
+    @field_validator("output_format")
+    @classmethod
+    def validate_output_format(cls, v: str) -> str:
+        return _validate_output_format(v)

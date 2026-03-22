@@ -14,6 +14,7 @@ from pixelforge_mcp.utils.validation import (
     PERSON_GENERATION_OPTIONS,
     PERSON_GENERATION_SDK_MAP,
     PROMPT_STYLES,
+    QUALITY_PRESETS,
     AnalyzeImageInput,
     CompareImagesInput,
     DetectObjectsInput,
@@ -296,6 +297,51 @@ class TestGenerateAllNewParams:
         assert input_data.person_generation == "allow"
 
 
+class TestQualityPresets:
+    """Tests for quality preset validation."""
+
+    def test_quality_preset_valid(self):
+        """Test quality='fast' is accepted."""
+        data = GenerateImageInput(prompt="test", quality="fast")
+        assert data.quality == "fast"
+
+    def test_quality_preset_all_valid(self):
+        """Test all valid quality presets are accepted."""
+        for preset in QUALITY_PRESETS:
+            data = GenerateImageInput(prompt="test", quality=preset)
+            assert data.quality == preset
+
+    def test_quality_preset_case_insensitive(self):
+        """Test quality is case insensitive."""
+        data = GenerateImageInput(prompt="test", quality="BALANCED")
+        assert data.quality == "balanced"
+
+    def test_quality_preset_invalid(self):
+        """Test quality='ultra' is rejected."""
+        with pytest.raises(ValidationError, match="Invalid quality preset"):
+            GenerateImageInput(prompt="test", quality="ultra")
+
+    def test_quality_and_model_exclusive(self):
+        """Test both quality and model set raises ValidationError."""
+        with pytest.raises(ValidationError, match="mutually exclusive"):
+            GenerateImageInput(
+                prompt="test",
+                quality="fast",
+                model="gemini-2.5-flash-image",
+            )
+
+    def test_quality_without_model_ok(self):
+        """Test quality alone works fine without model."""
+        data = GenerateImageInput(prompt="test", quality="quality")
+        assert data.quality == "quality"
+        assert data.model is None
+
+    def test_quality_default_is_none(self):
+        """Test default quality is None."""
+        data = GenerateImageInput(prompt="test")
+        assert data.quality is None
+
+
 class TestEditImageInput:
     """Tests for EditImageInput validation."""
 
@@ -421,6 +467,54 @@ class TestEditImageInput:
                 input_image_path=str(image_path),
                 output_format="bmp",
             )
+
+    def test_edit_filename_path_traversal(self, tmp_path):
+        """Test path traversal in edit output_filename is rejected."""
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        with pytest.raises(ValidationError, match="cannot contain path separators"):
+            EditImageInput(
+                prompt="add clouds",
+                input_image_path=str(image_path),
+                output_filename="../evil.png",
+            )
+
+    def test_edit_filename_with_slash(self, tmp_path):
+        """Test slash in edit output_filename is rejected."""
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        with pytest.raises(ValidationError, match="cannot contain path separators"):
+            EditImageInput(
+                prompt="add clouds",
+                input_image_path=str(image_path),
+                output_filename="dir/evil.png",
+            )
+
+    def test_edit_filename_special_chars(self, tmp_path):
+        """Test special characters in edit output_filename are rejected."""
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        with pytest.raises(ValidationError, match="can only contain"):
+            EditImageInput(
+                prompt="add clouds",
+                input_image_path=str(image_path),
+                output_filename="test@file.png",
+            )
+
+    def test_edit_filename_valid(self, tmp_path):
+        """Test valid edit output_filename is accepted."""
+        image_path = tmp_path / "test.png"
+        image_path.touch()
+
+        input_data = EditImageInput(
+            prompt="add clouds",
+            input_image_path=str(image_path),
+            output_filename="my_image.png",
+        )
+        assert input_data.output_filename == "my_image.png"
 
 
 class TestAnalyzeImageInput:
@@ -580,12 +674,25 @@ class TestConstants:
         assert "gemini-3-pro-image-preview" in COST_TABLE
         assert "gemini-3.1-flash-image-preview" in COST_TABLE
 
-    def test_cost_table_has_all_operations(self):
-        """Test each model has generate, edit, analyze costs."""
+    def test_cost_table_has_generate(self):
+        """Test all models have at least a generate cost."""
         for model_name, costs in COST_TABLE.items():
             assert "generate" in costs, f"{model_name} missing generate"
+
+    def test_gemini_models_have_all_operations(self):
+        """Test Gemini models have generate, edit, and analyze costs."""
+        gemini_models = [m for m in COST_TABLE if m.startswith("gemini-")]
+        for model_name in gemini_models:
+            costs = COST_TABLE[model_name]
             assert "edit" in costs, f"{model_name} missing edit"
             assert "analyze" in costs, f"{model_name} missing analyze"
+
+    def test_imagen4_models_generate_only(self):
+        """Test Imagen 4 models only have generate cost."""
+        imagen_models = [m for m in COST_TABLE if m.startswith("imagen-")]
+        assert len(imagen_models) >= 2
+        for model_name in imagen_models:
+            assert "generate" in COST_TABLE[model_name]
 
 
 # ------------------------------------------------------------------
@@ -753,6 +860,50 @@ class TestRemoveBackgroundInput:
         """Test non-existent image is rejected."""
         with pytest.raises(ValidationError, match="not found"):
             RemoveBackgroundInput(image_path="/nonexistent.png")
+
+    def test_removebg_filename_path_traversal(self, tmp_path):
+        """Test path traversal in remove background output_filename is rejected."""
+        img = tmp_path / "product.jpg"
+        img.touch()
+
+        with pytest.raises(ValidationError, match="cannot contain path separators"):
+            RemoveBackgroundInput(
+                image_path=str(img),
+                output_filename="../evil.png",
+            )
+
+    def test_removebg_filename_with_slash(self, tmp_path):
+        """Test slash in remove background output_filename is rejected."""
+        img = tmp_path / "product.jpg"
+        img.touch()
+
+        with pytest.raises(ValidationError, match="cannot contain path separators"):
+            RemoveBackgroundInput(
+                image_path=str(img),
+                output_filename="dir/evil.png",
+            )
+
+    def test_removebg_filename_special_chars(self, tmp_path):
+        """Test special characters in remove background output_filename are rejected."""
+        img = tmp_path / "product.jpg"
+        img.touch()
+
+        with pytest.raises(ValidationError, match="can only contain"):
+            RemoveBackgroundInput(
+                image_path=str(img),
+                output_filename="test@file.png",
+            )
+
+    def test_removebg_filename_valid(self, tmp_path):
+        """Test valid remove background output_filename is accepted."""
+        img = tmp_path / "product.jpg"
+        img.touch()
+
+        data = RemoveBackgroundInput(
+            image_path=str(img),
+            output_filename="my_image.png",
+        )
+        assert data.output_filename == "my_image.png"
 
 
 class TestEstimateCostInput:

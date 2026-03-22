@@ -1,5 +1,6 @@
 """Main MCP server implementation for Gemini Imagen."""
 
+import asyncio
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -13,15 +14,21 @@ from .utils.api_client import GenerationResult, ImagenAPIClient
 from .utils.validation import (
     COST_TABLE,
     FORMAT_EXTENSIONS,
+    QUALITY_PRESETS,
+    AdvancedEditInput,
     AnalyzeImageInput,
+    ApplyTemplateInput,
     CompareImagesInput,
     DetectObjectsInput,
     EditImageInput,
     EstimateCostInput,
     ExtractTextInput,
     GenerateImageInput,
+    ListTemplatesInput,
     OptimizePromptInput,
     RemoveBackgroundInput,
+    TransformImageInput,
+    UpscaleImageInput,
 )
 
 # Configure logging
@@ -33,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 
 # Initialize FastMCP server
-mcp = FastMCP("gemini-imagen-mcp")
+mcp = FastMCP("pixelforge-mcp")
 
 
 # Initialize API client (will be set on first use)
@@ -45,9 +52,12 @@ def get_api_client() -> ImagenAPIClient:
     global _client
     if _client is None:
         config = get_config()
+        api_key = (
+            config.imagen.api_key.get_secret_value() if config.imagen.api_key else None
+        )
         _client = ImagenAPIClient(
             model_name=config.imagen.default_model,
-            api_key=config.imagen.api_key,
+            api_key=api_key,
             log_images=False,
         )
     return _client
@@ -113,12 +123,14 @@ async def generate_image(
     aspect_ratio: str = "1:1",
     temperature: float = 0.7,
     model: Optional[str] = None,
+    quality: Optional[str] = None,
     safety_setting: str = "preset:strict",
     image_size: Optional[str] = None,
     number_of_images: int = 1,
     output_format: str = "png",
     person_generation: Optional[str] = None,
     reference_images: Optional[List[str]] = None,
+    thinking_budget: Optional[int] = None,
 ) -> dict:
     """Generate an image from a text prompt using Google Gemini.
 
@@ -132,6 +144,9 @@ async def generate_image(
             - "gemini-2.5-flash-image" (default): Fast, cheap
             - "gemini-3-pro-image-preview": Best text, complex edits
             - "gemini-3.1-flash-image-preview": Panoramic, fast 4K
+        quality: Quality preset: "fast" (cheapest), "balanced"
+            (good quality), or "quality" (best output). Mutually
+            exclusive with 'model'.
         safety_setting: Safety filter (preset:strict, preset:relaxed)
         image_size: Resolution: "1K" (default), "2K", or "4K"
         number_of_images: Generate 1-4 variations (default: 1)
@@ -140,12 +155,19 @@ async def generate_image(
             (no minors), or "block" (no people)
         reference_images: Paths to reference images for style/character
             consistency (up to 14 images)
+        thinking_budget: Thinking budget for extended reasoning
+            (0-24576 tokens). Higher = deeper reasoning.
 
     Returns:
         Dictionary with generation result and image path(s)
 
     Example:
         generate_image(prompt="A sunset over mountains")
+
+        generate_image(
+            prompt="Product photo of a watch",
+            quality="quality"
+        )
 
         generate_image(
             prompt="Product photo of a watch",
@@ -163,19 +185,30 @@ async def generate_image(
             aspect_ratio=aspect_ratio,
             temperature=temperature,
             model=model,
+            quality=quality,
             safety_setting=safety_setting,
             image_size=image_size,
             number_of_images=number_of_images,
             output_format=output_format,
             person_generation=person_generation,
             reference_images=reference_images,
+            thinking_budget=thinking_budget,
         )
+
+        # Resolve quality preset
+        if inputs.quality:
+            preset = QUALITY_PRESETS[inputs.quality]
+            resolved_model = preset["model"]
+            resolved_image_size = preset["image_size"] or inputs.image_size
+        else:
+            resolved_model = inputs.model
+            resolved_image_size = inputs.image_size
 
         client = get_api_client()
         n = inputs.number_of_images
         paths = []
-        errors = []
 
+        # Build all paths first
         for i in range(n):
             suffix = f"_{i + 1}" if n > 1 else ""
             if inputs.output_filename and n > 1:
@@ -193,25 +226,72 @@ async def generate_image(
             )
             paths.append(path)
 
-            result = await client.generate(
+        # Generate all images in parallel
+        async def _generate_one(path: Path) -> GenerationResult:
+            return await client.generate(
                 prompt=inputs.prompt,
                 output_path=path,
                 aspect_ratio=inputs.aspect_ratio,
                 temperature=inputs.temperature,
-                model=inputs.model,
+                model=resolved_model,
                 safety_setting=inputs.safety_setting,
-                image_size=inputs.image_size,
+                image_size=resolved_image_size,
                 person_generation=inputs.person_generation,
                 reference_images=inputs.reference_images,
                 output_format=inputs.output_format,
+                thinking_budget=inputs.thinking_budget,
             )
 
-            if not result.success:
-                errors.append(result.error or "Unknown error")
+        raw_results = await asyncio.gather(
+            *[_generate_one(p) for p in paths],
+            return_exceptions=True,
+        )
 
-        response = format_image_result(result, paths)
+        # Process results
+        errors: list[str] = []
+        results: list[GenerationResult] = []
+        for i, result in enumerate(raw_results):
+            if isinstance(result, Exception):
+                errors.append(str(result))
+                results.append(
+                    GenerationResult(success=False, output="", error=str(result))
+                )
+            else:
+                results.append(result)
+                if not result.success:
+                    errors.append(result.error or "Unknown error")
+
+        # Aggregate: report success based on ALL results
+        succeeded = [r for r in results if r.success]
+        successful_paths = [p for p, r in zip(paths, results) if r.success]
+
+        if not succeeded:
+            return {
+                "success": False,
+                "message": "All image generations failed",
+                "errors": errors,
+            }
+
+        response = format_image_result(succeeded[0], successful_paths)
         if errors and n > 1:
+            response["partial_failure"] = True
             response["errors"] = errors
+            response["message"] = (
+                f"{len(succeeded)}/{n} images generated" " successfully"
+            )
+
+        # Log to history
+        from pixelforge_mcp.utils.history import get_history
+
+        history = get_history()
+        history.log(
+            tool="generate_image",
+            params={"prompt": prompt, "model": resolved_model},
+            success=True,
+            output_paths=[str(p) for p in successful_paths],
+            model=resolved_model,
+        )
+
         return response
 
     except ValidationError as e:
@@ -286,6 +366,18 @@ async def edit_image(
         response = format_image_result(result, [output_path])
         if result.success:
             logger.info(f"Image edited: {output_path}")
+
+            # Log to history
+            from pixelforge_mcp.utils.history import get_history
+
+            history = get_history()
+            history.log(
+                tool="edit_image",
+                params={"prompt": prompt, "input_image_path": input_image_path},
+                success=True,
+                output_paths=[str(output_path)],
+                model=inputs.model,
+            )
         else:
             logger.error(f"Edit failed: {result.error}")
         return response
@@ -346,7 +438,21 @@ async def remove_background(
             output_format=inputs.output_format,
         )
 
-        return format_image_result(result, [output_path])
+        response = format_image_result(result, [output_path])
+
+        if result.success:
+            # Log to history
+            from pixelforge_mcp.utils.history import get_history
+
+            history = get_history()
+            history.log(
+                tool="remove_background",
+                params={"image_path": image_path},
+                success=True,
+                output_paths=[str(output_path)],
+            )
+
+        return response
 
     except ValidationError as e:
         return {"success": False, "message": f"Invalid input: {e}"}
@@ -358,18 +464,336 @@ async def remove_background(
         }
 
 
+@mcp.tool()
+async def transform_image(
+    image_path: str,
+    operation: str,
+    output_filename: Optional[str] = None,
+    output_format: str = "png",
+    x: Optional[int] = None,
+    y: Optional[int] = None,
+    width: Optional[int] = None,
+    height: Optional[int] = None,
+    maintain_aspect: bool = True,
+    degrees: Optional[float] = None,
+    direction: Optional[str] = None,
+    radius: float = 2.0,
+    factor: float = 2.0,
+    text: Optional[str] = None,
+    position: str = "bottom-right",
+    opacity: float = 0.5,
+) -> dict:
+    """Transform an image using Pillow operations.
+
+    Args:
+        image_path: Path to the image to transform
+        operation: One of: crop, resize, rotate, flip, blur, sharpen,
+            grayscale, watermark
+        output_filename: Custom output filename (optional)
+        output_format: Output format (png, jpeg, webp)
+        x, y: Crop offset coordinates
+        width, height: Dimensions for crop/resize
+        maintain_aspect: Keep aspect ratio when resizing (default: True)
+        degrees: Rotation angle in degrees
+        direction: Flip direction ('horizontal' or 'vertical')
+        radius: Blur radius (default: 2.0)
+        factor: Sharpness factor (default: 2.0, >1 = sharper)
+        text: Watermark text
+        position: Watermark position (default: 'bottom-right')
+        opacity: Watermark opacity 0.0-1.0 (default: 0.5)
+
+    Returns:
+        Dictionary with transform result and output path
+    """
+    logger.info(f"Transforming image: {operation}")
+
+    try:
+        inputs = TransformImageInput(
+            image_path=image_path,
+            operation=operation,
+            output_filename=output_filename,
+            output_format=output_format,
+            x=x,
+            y=y,
+            width=width,
+            height=height,
+            maintain_aspect=maintain_aspect,
+            degrees=degrees,
+            direction=direction,
+            radius=radius,
+            factor=factor,
+            text=text,
+            position=position,
+            opacity=opacity,
+        )
+
+        from PIL import Image as PILImage
+
+        from pixelforge_mcp.utils import transforms
+
+        img = PILImage.open(inputs.image_path)
+
+        # Dispatch to the correct transform function
+        op = inputs.operation
+        if op == "crop":
+            if (
+                inputs.x is None
+                or inputs.y is None
+                or inputs.width is None
+                or inputs.height is None
+            ):
+                return {
+                    "success": False,
+                    "message": "crop requires x, y, width, height",
+                }
+            img = transforms.crop(img, inputs.x, inputs.y, inputs.width, inputs.height)
+        elif op == "resize":
+            if inputs.width is None or inputs.height is None:
+                return {
+                    "success": False,
+                    "message": "resize requires width and height",
+                }
+            img = transforms.resize(
+                img, inputs.width, inputs.height, inputs.maintain_aspect
+            )
+        elif op == "rotate":
+            if inputs.degrees is None:
+                return {
+                    "success": False,
+                    "message": "rotate requires degrees",
+                }
+            img = transforms.rotate(img, inputs.degrees)
+        elif op == "flip":
+            if inputs.direction is None:
+                return {
+                    "success": False,
+                    "message": "flip requires direction",
+                }
+            img = transforms.flip(img, inputs.direction)
+        elif op == "blur":
+            img = transforms.blur(img, inputs.radius)
+        elif op == "sharpen":
+            img = transforms.sharpen(img, inputs.factor)
+        elif op == "grayscale":
+            img = transforms.grayscale(img)
+        elif op == "watermark":
+            if inputs.text is None:
+                return {
+                    "success": False,
+                    "message": "watermark requires text",
+                }
+            img = transforms.watermark(
+                img, inputs.text, inputs.position, inputs.opacity
+            )
+
+        # Save result
+        output_path = generate_output_path(
+            filename=inputs.output_filename,
+            prefix=f"transformed_{op}",
+            output_format=inputs.output_format,
+        )
+        ImagenAPIClient._save_image(img, output_path, inputs.output_format)
+
+        # Log to history
+        from pixelforge_mcp.utils.history import get_history
+
+        history = get_history()
+        history.log(
+            tool="transform_image",
+            params={"image_path": image_path, "operation": operation},
+            success=True,
+            output_paths=[str(output_path.absolute())],
+        )
+
+        return {
+            "success": True,
+            "message": f"Image {op} applied successfully",
+            "output_path": str(output_path.absolute()),
+            "operation": op,
+            "size_bytes": output_path.stat().st_size,
+        }
+
+    except ValidationError as e:
+        return {"success": False, "message": f"Invalid input: {e}"}
+    except Exception as e:
+        logger.error(f"Transform error: {e}", exc_info=True)
+        return {"success": False, "message": f"Transform failed: {e}"}
+
+
+# ------------------------------------------------------------------
+# Vertex AI tools (optional)
+# ------------------------------------------------------------------
+
+
+@mcp.tool()
+async def upscale_image(
+    image_path: str,
+    upscale_factor: str = "x2",
+    output_filename: Optional[str] = None,
+    output_format: str = "png",
+) -> dict:
+    """Upscale an image to higher resolution (requires Vertex AI).
+
+    This feature requires Google Cloud Vertex AI credentials.
+    Set GOOGLE_CLOUD_PROJECT environment variable to enable.
+
+    Args:
+        image_path: Path to the image to upscale
+        upscale_factor: Scale factor: "x2" (double) or "x4" (quadruple)
+        output_filename: Custom output filename (optional)
+        output_format: Output format (png, jpeg, webp)
+
+    Returns:
+        Dictionary with upscaled image path
+    """
+    logger.info(f"Upscaling image: {upscale_factor}")
+
+    try:
+        config = get_config()
+        if not config.vertex.enabled:
+            return {
+                "success": False,
+                "message": "Vertex AI is not configured. "
+                "Set GOOGLE_CLOUD_PROJECT environment variable "
+                "and install: pip install pixelforge-mcp[vertex]",
+            }
+
+        inputs = UpscaleImageInput(
+            image_path=image_path,
+            upscale_factor=upscale_factor,
+            output_filename=output_filename,
+            output_format=output_format,
+        )
+
+        output_path = generate_output_path(
+            filename=inputs.output_filename,
+            prefix="upscaled",
+            output_format=inputs.output_format,
+        )
+
+        client = get_api_client()
+        result = await client.upscale(
+            image_path=Path(inputs.image_path),
+            output_path=output_path,
+            upscale_factor=inputs.upscale_factor,
+            output_format=inputs.output_format,
+        )
+
+        if result.success:
+            return {
+                "success": True,
+                "message": result.output,
+                "output_path": str(output_path.absolute()),
+                "upscale_factor": inputs.upscale_factor,
+            }
+        else:
+            return {"success": False, "message": result.error or "Upscaling failed"}
+
+    except ValidationError as e:
+        return {"success": False, "message": f"Invalid input: {e}"}
+    except Exception as e:
+        logger.error(f"Upscale error: {e}", exc_info=True)
+        return {"success": False, "message": str(e)}
+
+
+@mcp.tool()
+async def advanced_edit(
+    image_path: str,
+    prompt: str,
+    edit_mode: str,
+    mask_path: Optional[str] = None,
+    output_filename: Optional[str] = None,
+    output_format: str = "png",
+) -> dict:
+    """Advanced image editing with specialized modes (requires Vertex AI).
+
+    This feature requires Google Cloud Vertex AI credentials.
+    Set GOOGLE_CLOUD_PROJECT environment variable to enable.
+
+    Args:
+        image_path: Path to the image to edit
+        prompt: Edit instruction
+        edit_mode: One of: inpaint_removal, inpaint_insertion, outpaint,
+            background_swap, style_transfer, product_image
+        mask_path: Optional mask image for inpainting operations
+        output_filename: Custom output filename (optional)
+        output_format: Output format (png, jpeg, webp)
+
+    Returns:
+        Dictionary with edited image path
+    """
+    logger.info(f"Advanced edit: {edit_mode}")
+
+    try:
+        config = get_config()
+        if not config.vertex.enabled:
+            return {
+                "success": False,
+                "message": "Vertex AI is not configured. "
+                "Set GOOGLE_CLOUD_PROJECT environment variable "
+                "and install: pip install pixelforge-mcp[vertex]",
+            }
+
+        inputs = AdvancedEditInput(
+            image_path=image_path,
+            prompt=prompt,
+            edit_mode=edit_mode,
+            mask_path=mask_path,
+            output_filename=output_filename,
+            output_format=output_format,
+        )
+
+        output_path = generate_output_path(
+            filename=inputs.output_filename,
+            prefix=f"advanced_{inputs.edit_mode}",
+            output_format=inputs.output_format,
+        )
+
+        client = get_api_client()
+        result = await client.advanced_edit(
+            image_path=Path(inputs.image_path),
+            prompt=inputs.prompt,
+            edit_mode=inputs.edit_mode,
+            output_path=output_path,
+            mask_path=Path(inputs.mask_path) if inputs.mask_path else None,
+            output_format=inputs.output_format,
+        )
+
+        if result.success:
+            return {
+                "success": True,
+                "message": result.output,
+                "output_path": str(output_path.absolute()),
+                "edit_mode": inputs.edit_mode,
+            }
+        else:
+            return {"success": False, "message": result.error or "Edit failed"}
+
+    except ValidationError as e:
+        return {"success": False, "message": f"Invalid input: {e}"}
+    except Exception as e:
+        logger.error(f"Advanced edit error: {e}", exc_info=True)
+        return {"success": False, "message": str(e)}
+
+
 # ------------------------------------------------------------------
 # Analysis tools
 # ------------------------------------------------------------------
 
 
 @mcp.tool()
-async def analyze_image(image_path: str, prompt: Optional[str] = None) -> dict:
+async def analyze_image(
+    image_path: str,
+    prompt: Optional[str] = None,
+    use_grounding: bool = False,
+) -> dict:
     """Analyze an image and get a detailed description.
 
     Args:
         image_path: Path to the image to analyze
         prompt: Custom analysis prompt. Default: general description.
+        use_grounding: Enable Google Search grounding for more
+            accurate, factual analysis results.
 
     Returns:
         Dictionary with analysis results
@@ -385,10 +809,16 @@ async def analyze_image(image_path: str, prompt: Optional[str] = None) -> dict:
     logger.info(f"Analyzing image: {image_path}")
 
     try:
-        inputs = AnalyzeImageInput(image_path=image_path, prompt=prompt)
+        inputs = AnalyzeImageInput(
+            image_path=image_path, prompt=prompt, use_grounding=use_grounding
+        )
 
         client = get_api_client()
-        result = await client.analyze(Path(inputs.image_path), prompt=inputs.prompt)
+        result = await client.analyze(
+            Path(inputs.image_path),
+            prompt=inputs.prompt,
+            use_grounding=inputs.use_grounding,
+        )
 
         if result.success and result.data:
             return {
@@ -413,7 +843,10 @@ async def analyze_image(image_path: str, prompt: Optional[str] = None) -> dict:
 
 
 @mcp.tool()
-async def extract_text(image_path: str) -> dict:
+async def extract_text(
+    image_path: str,
+    use_grounding: bool = False,
+) -> dict:
     """Extract text from an image using OCR.
 
     Uses Gemini's vision capabilities for high-quality text extraction.
@@ -421,6 +854,8 @@ async def extract_text(image_path: str) -> dict:
 
     Args:
         image_path: Path to the image to extract text from
+        use_grounding: Enable Google Search grounding for more
+            accurate, factual results.
 
     Returns:
         Dictionary with extracted text and text blocks
@@ -431,10 +866,13 @@ async def extract_text(image_path: str) -> dict:
     logger.info(f"Extracting text: {image_path}")
 
     try:
-        inputs = ExtractTextInput(image_path=image_path)
+        inputs = ExtractTextInput(image_path=image_path, use_grounding=use_grounding)
 
         client = get_api_client()
-        result = await client.extract_text(Path(inputs.image_path))
+        result = await client.extract_text(
+            Path(inputs.image_path),
+            use_grounding=inputs.use_grounding,
+        )
 
         if result.success and result.data:
             return {
@@ -460,7 +898,11 @@ async def extract_text(image_path: str) -> dict:
 
 
 @mcp.tool()
-async def detect_objects(image_path: str, objects: Optional[str] = None) -> dict:
+async def detect_objects(
+    image_path: str,
+    objects: Optional[str] = None,
+    use_grounding: bool = False,
+) -> dict:
     """Detect objects in an image with bounding boxes.
 
     Uses Gemini's zero-shot object detection. Returns bounding box
@@ -471,6 +913,8 @@ async def detect_objects(image_path: str, objects: Optional[str] = None) -> dict
         image_path: Path to the image
         objects: Specific objects to detect (e.g. "cats and dogs").
             Default: detect all visible objects.
+        use_grounding: Enable Google Search grounding for more
+            accurate, factual results.
 
     Returns:
         Dictionary with detected objects and bounding boxes
@@ -486,11 +930,15 @@ async def detect_objects(image_path: str, objects: Optional[str] = None) -> dict
     logger.info(f"Detecting objects: {image_path}")
 
     try:
-        inputs = DetectObjectsInput(image_path=image_path, objects=objects)
+        inputs = DetectObjectsInput(
+            image_path=image_path, objects=objects, use_grounding=use_grounding
+        )
 
         client = get_api_client()
         result = await client.detect_objects(
-            Path(inputs.image_path), objects=inputs.objects
+            Path(inputs.image_path),
+            objects=inputs.objects,
+            use_grounding=inputs.use_grounding,
         )
 
         if result.success and result.data:
@@ -520,6 +968,7 @@ async def detect_objects(image_path: str, objects: Optional[str] = None) -> dict
 async def compare_images(
     image_paths: List[str],
     prompt: Optional[str] = None,
+    use_grounding: bool = False,
 ) -> dict:
     """Compare two or more images and analyze differences.
 
@@ -530,6 +979,8 @@ async def compare_images(
         image_paths: Paths to 2+ images to compare
         prompt: Comparison focus (e.g. "color differences").
             Default: general comparison.
+        use_grounding: Enable Google Search grounding for more
+            accurate, factual results.
 
     Returns:
         Dictionary with comparison analysis
@@ -547,18 +998,28 @@ async def compare_images(
     logger.info(f"Comparing {len(image_paths)} images")
 
     try:
-        inputs = CompareImagesInput(image_paths=image_paths, prompt=prompt)
+        inputs = CompareImagesInput(
+            image_paths=image_paths, prompt=prompt, use_grounding=use_grounding
+        )
 
         client = get_api_client()
         result = await client.compare_images(
             [Path(p) for p in inputs.image_paths],
             prompt=inputs.prompt,
+            use_grounding=inputs.use_grounding,
         )
 
-        if result.success:
+        if result.success and result.data:
+            data = result.data
             return {
                 "success": True,
-                "comparison": result.data.get("analysis", result.output),
+                "comparison": data.get("analysis", result.output),
+                "image_count": len(inputs.image_paths),
+            }
+        elif result.success:
+            return {
+                "success": True,
+                "comparison": result.output,
                 "image_count": len(inputs.image_paths),
             }
         else:
@@ -640,6 +1101,100 @@ async def optimize_prompt(prompt: str, style: Optional[str] = None) -> dict:
 
 
 @mcp.tool()
+async def list_templates(
+    category: Optional[str] = None,
+) -> dict:
+    """List available prompt templates for image generation.
+
+    Args:
+        category: Filter by category (product_photography, social_media,
+            illustration, portrait, architecture, food, fashion,
+            abstract, logo, panoramic). Omit for all.
+
+    Returns:
+        Dictionary with template list and categories
+    """
+    try:
+        inputs = ListTemplatesInput(category=category)
+
+        from pixelforge_mcp.utils.templates import get_template_library
+
+        library = get_template_library()
+
+        templates = library.list_templates(category=inputs.category)
+        categories = library.list_categories()
+
+        return {
+            "success": True,
+            "templates": templates,
+            "count": len(templates),
+            "categories": categories,
+            "filter": inputs.category,
+        }
+    except ValidationError as e:
+        return {"success": False, "message": f"Invalid input: {e}"}
+    except Exception as e:
+        logger.error(f"Template listing failed: {e}", exc_info=True)
+        return {"success": False, "message": str(e)}
+
+
+@mcp.tool()
+async def apply_template(
+    template_name: str,
+    subject: str,
+) -> dict:
+    """Apply a prompt template with a subject to generate a ready-to-use prompt.
+
+    Args:
+        template_name: Name of the template (e.g., 'product_hero',
+            'instagram_post'). Use list_templates() to see all.
+        subject: The subject to fill into the template
+            (e.g., 'wireless headphones', 'coffee shop')
+
+    Returns:
+        Dictionary with rendered prompt and recommendations
+
+    Example:
+        apply_template(
+            template_name="product_hero",
+            subject="wireless headphones"
+        )
+    """
+    try:
+        inputs = ApplyTemplateInput(
+            template_name=template_name,
+            subject=subject,
+        )
+
+        from pixelforge_mcp.utils.templates import get_template_library
+
+        library = get_template_library()
+
+        result = library.apply_template(
+            inputs.template_name,
+            {"subject": inputs.subject},
+        )
+
+        if result:
+            return {
+                "success": True,
+                **result,
+            }
+        else:
+            available = [t["name"] for t in library.list_templates()]
+            return {
+                "success": False,
+                "message": f"Template '{inputs.template_name}' not found",
+                "available_templates": available,
+            }
+    except ValidationError as e:
+        return {"success": False, "message": f"Invalid input: {e}"}
+    except Exception as e:
+        logger.error(f"Template application failed: {e}", exc_info=True)
+        return {"success": False, "message": str(e)}
+
+
+@mcp.tool()
 async def estimate_cost(
     operation: str,
     model: Optional[str] = None,
@@ -718,6 +1273,165 @@ async def estimate_cost(
             "success": False,
             "message": f"Error estimating cost: {str(e)}",
         }
+
+
+# ------------------------------------------------------------------
+# History & batch tools
+# ------------------------------------------------------------------
+
+
+@mcp.tool()
+async def list_history(
+    limit: int = 20,
+    offset: int = 0,
+    tool_filter: Optional[str] = None,
+) -> dict:
+    """List recent generation history.
+
+    Args:
+        limit: Maximum entries to return (default: 20)
+        offset: Skip this many entries (for pagination)
+        tool_filter: Filter by tool name (generate_image, edit_image, etc.)
+
+    Returns:
+        Dictionary with history entries
+    """
+    from pixelforge_mcp.utils.history import get_history
+
+    history = get_history()
+
+    entries = history.list_entries(limit=limit, offset=offset, tool_filter=tool_filter)
+    total = history.count(tool_filter=tool_filter)
+
+    return {
+        "success": True,
+        "entries": entries,
+        "count": len(entries),
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+    }
+
+
+@mcp.tool()
+async def get_generation_details(
+    generation_id: str,
+) -> dict:
+    """Get details of a specific generation by ID.
+
+    Args:
+        generation_id: The generation ID (from list_history)
+
+    Returns:
+        Dictionary with generation details
+    """
+    from pixelforge_mcp.utils.history import get_history
+
+    history = get_history()
+
+    entry = history.get_entry(generation_id)
+    if entry:
+        return {"success": True, **entry}
+    else:
+        return {
+            "success": False,
+            "message": f"Generation '{generation_id}' not found",
+        }
+
+
+@mcp.tool()
+async def batch_generate(
+    prompts: List[str],
+    model: Optional[str] = None,
+    aspect_ratio: str = "1:1",
+    output_format: str = "png",
+    quality: Optional[str] = None,
+) -> dict:
+    """Generate multiple images in parallel from a list of prompts.
+
+    Args:
+        prompts: List of text prompts (1-10)
+        model: Model to use for all generations (optional)
+        aspect_ratio: Aspect ratio for all images (default: 1:1)
+        output_format: Output format for all images (default: png)
+        quality: Quality preset (fast, balanced, quality)
+
+    Returns:
+        Dictionary with per-prompt results
+    """
+    if not prompts:
+        return {"success": False, "message": "No prompts provided"}
+    if len(prompts) > 10:
+        return {"success": False, "message": "Maximum 10 prompts per batch"}
+
+    logger.info(f"Batch generating {len(prompts)} images")
+
+    # Resolve quality preset
+    resolved_model = model
+    resolved_image_size = None
+    if quality:
+        if quality.lower() not in QUALITY_PRESETS:
+            return {
+                "success": False,
+                "message": f"Invalid quality preset: {quality}",
+            }
+        preset = QUALITY_PRESETS[quality.lower()]
+        resolved_model = preset["model"]
+        resolved_image_size = preset["image_size"]
+
+    client = get_api_client()
+
+    async def _gen_one(i: int, prompt: str):
+        path = generate_output_path(
+            prefix=f"batch_{i + 1}",
+            output_format=output_format,
+        )
+        result = await client.generate(
+            prompt=prompt,
+            output_path=path,
+            aspect_ratio=aspect_ratio,
+            model=resolved_model,
+            image_size=resolved_image_size,
+            output_format=output_format,
+        )
+        return {
+            "index": i,
+            "prompt": prompt[:100],
+            "success": result.success,
+            "output_path": str(path.absolute()) if result.success else None,
+            "error": result.error if not result.success else None,
+        }
+
+    results = await asyncio.gather(
+        *[_gen_one(i, p) for i, p in enumerate(prompts)],
+        return_exceptions=True,
+    )
+
+    # Handle exceptions
+    processed = []
+    for i, r in enumerate(results):
+        if isinstance(r, Exception):
+            processed.append(
+                {
+                    "index": i,
+                    "prompt": prompts[i][:100],
+                    "success": False,
+                    "error": str(r),
+                }
+            )
+        else:
+            processed.append(r)
+
+    succeeded = sum(1 for r in processed if r.get("success"))
+
+    return {
+        "success": succeeded > 0,
+        "message": f"{succeeded}/{len(prompts)} images generated",
+        "results": processed,
+        "total": len(prompts),
+        "succeeded": succeeded,
+        "failed": len(prompts) - succeeded,
+    }
 
 
 # ------------------------------------------------------------------
@@ -804,7 +1518,6 @@ def get_server_info() -> dict:
         },
         "storage": {
             "output_directory": str(config.storage.output_dir),
-            "use_s3": config.storage.use_s3,
         },
         "imagen": {
             "default_model": config.imagen.default_model,
@@ -816,6 +1529,7 @@ def get_server_info() -> dict:
                 "generate_image",
                 "edit_image",
                 "remove_background",
+                "transform_image",
             ],
             "analysis": [
                 "analyze_image",
@@ -825,10 +1539,25 @@ def get_server_info() -> dict:
             ],
             "utility": [
                 "optimize_prompt",
+                "list_templates",
+                "apply_template",
                 "estimate_cost",
                 "list_available_models",
                 "get_server_info",
             ],
+            "history": [
+                "list_history",
+                "get_generation_details",
+                "batch_generate",
+            ],
+        },
+        "vertex_ai": {
+            "enabled": config.vertex.enabled,
+            "project_id": config.vertex.project_id,
+            "features": (
+                ["upscale_image", "advanced_edit"] if config.vertex.enabled else []
+            ),
+            "setup": "Set GOOGLE_CLOUD_PROJECT and install pixelforge-mcp[vertex]",
         },
         "features": {
             "resolution_control": "1K/2K/4K via image_size",
@@ -840,8 +1569,13 @@ def get_server_info() -> dict:
             "ocr": "Text extraction from images",
             "object_detection": "Bounding box detection",
             "background_removal": "Subject isolation",
+            "image_transforms": "Crop, resize, rotate, flip, "
+            "blur, sharpen, grayscale, watermark",
             "image_comparison": "Multi-image analysis",
             "cost_estimation": "Per-operation pricing",
+            "prompt_templates": "Curated templates with " "model/ratio recommendations",
+            "generation_history": "Append-only JSON log of all operations",
+            "batch_generation": "Parallel generation of up to 10 images",
         },
     }
 

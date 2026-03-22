@@ -1,6 +1,6 @@
 [project]
 name = "pixelforge-mcp"
-version = "0.3.0"
+version = "0.5.0"
 description = "AI-powered image generation MCP server with multi-model support"
 authors = [{name = "Ahmed Al-Eryani", email = "ahmed@tehnolabs.com"}]
 readme = "README.md"
@@ -23,8 +23,9 @@ classifiers = [
 ]
 
 dependencies = [
-    "fastmcp>=2.0.0,<3.0.0",
-    "gemini-imagen>=0.6.0",
+    "fastmcp>=3.1.0,<4.0.0",
+    "google-genai>=1.62.0,<2.0.0",
+    "pillow>=10.1.0",
     "pydantic>=2.0.0",
     "pyyaml>=6.0.0",
 ]
@@ -37,11 +38,8 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.0.0",
 ]
-s3 = [
-    "boto3>=1.28.0",
-]
-image = [
-    "pillow>=10.0.0",
+vertex = [
+    "google-cloud-aiplatform>=1.38.0",
 ]
 
 [project.urls]
@@ -51,6 +49,9 @@ Repository = "https://github.com/tehnolabs/pixelforge-mcp"
 
 [project.scripts]
 pixelforge-mcp = "pixelforge_mcp.server:main"
+
+[tool.setuptools.package-data]
+pixelforge_mcp = ["templates/*.yaml"]
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
@@ -62,6 +63,8 @@ target-version = ['py310', 'py311']
 
 [tool.ruff]
 line-length = 88
+
+[tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
 
 [tool.mypy]

@@ -57,9 +57,6 @@ class TestStorageConfig:
         """Test StorageConfig uses correct defaults."""
         config = StorageConfig()
         assert config.output_dir == Path("./generated_images")
-        assert config.use_s3 is False
-        assert config.s3_bucket is None
-        assert config.s3_prefix == ""
 
     def test_output_dir_creation(self, tmp_path):
         """Test output directory is created if it doesn't exist."""
@@ -77,8 +74,8 @@ class TestServerConfig:
     def test_default_values(self):
         """Test ServerConfig uses correct defaults."""
         config = ServerConfig()
-        assert config.name == "gemini-imagen-mcp"
-        assert config.version == "0.2.0"
+        assert config.name == "pixelforge-mcp"
+        assert config.version == "0.5.0"
         assert config.log_level == "INFO"
 
 
@@ -99,10 +96,14 @@ class TestConfig:
 
         config = Config.load(config_file)
         assert isinstance(config, Config)
-        assert config.server.name == "gemini-imagen-mcp"
+        assert config.server.name == "pixelforge-mcp"
 
-    def test_load_from_yaml_file(self, tmp_path):
+    def test_load_from_yaml_file(self, tmp_path, monkeypatch):
         """Test loading config from YAML file."""
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        monkeypatch.delenv("GOOGLE_GENERATIVE_AI_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
         config_file = tmp_path / "config.yaml"
         config_data = {
             "imagen": {
@@ -112,8 +113,6 @@ class TestConfig:
             },
             "storage": {
                 "output_dir": str(tmp_path / "images"),
-                "use_s3": True,
-                "s3_bucket": "test-bucket",
             },
             "server": {
                 "log_level": "DEBUG",
@@ -125,8 +124,6 @@ class TestConfig:
         assert config.imagen.api_key == "test-key"
         assert config.imagen.default_model == "custom-model"
         assert config.imagen.default_temperature == 0.9
-        assert config.storage.use_s3 is True
-        assert config.storage.s3_bucket == "test-bucket"
         assert config.server.log_level == "DEBUG"
 
     def test_load_with_env_override(self, tmp_path, monkeypatch):
@@ -150,10 +147,14 @@ class TestConfig:
         config_file = tmp_path / "nonexistent.yaml"
         config = Config.load(config_file)
         assert isinstance(config, Config)
-        assert config.server.name == "gemini-imagen-mcp"
+        assert config.server.name == "pixelforge-mcp"
 
-    def test_save_config(self, tmp_path):
-        """Test saving config to file."""
+    def test_save_config(self, tmp_path, monkeypatch):
+        """Test saving config to file (API key is never persisted)."""
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        monkeypatch.delenv("GOOGLE_GENERATIVE_AI_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
         config_file = tmp_path / "config.yaml"
 
         config = Config(
@@ -169,9 +170,13 @@ class TestConfig:
         # Verify file was created
         assert config_file.exists()
 
-        # Load and verify contents
+        # API key must NOT be persisted to disk (security)
+        raw = config_file.read_text()
+        assert "test-key" not in raw
+
+        # Load and verify non-secret settings survive round-trip
         loaded_config = Config.load(config_file)
-        assert loaded_config.imagen.api_key == "test-key"
+        assert loaded_config.imagen.api_key is None  # Not in file
         assert loaded_config.imagen.default_temperature == 0.8
         assert loaded_config.server.log_level == "DEBUG"
 

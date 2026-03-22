@@ -8,16 +8,23 @@
   <img src="https://raw.githubusercontent.com/Tehnolabs/pixelforge-mcp/main/docs/assets/hero.png" alt="PixelForge MCP" width="600">
 </p>
 
-An MCP server for AI-powered image generation, editing, and analysis using Google's Gemini models.
+An MCP server for AI-powered image generation, editing, analysis, and transformation using Google's Gemini and Imagen 4 models.
 
 ## Features
 
-- Generate images from text prompts with per-request model switching
-- Edit existing images using natural language instructions
-- Analyze images with AI-powered descriptions
-- 14 aspect ratios (including panoramic) and temperature control for creative flexibility
+- **21 MCP tools** for image generation, editing, analysis, transformation, and more
+- **6 models** including Gemini image models and Imagen 4 family
+- **Quality presets** (fast/balanced/quality) for simplified model selection
+- **Parallel multi-image generation** via asyncio.gather
+- **Image transforms** — crop, resize, rotate, flip, blur, sharpen, grayscale, watermark
+- **Prompt template library** — 24 curated templates across 10 categories
+- **Generation history** — full audit trail with search and pagination
+- **Batch processing** — generate up to 10 images in parallel
+- **Optional Vertex AI** — upscaling (x2/x4) and advanced editing modes
+- **Thinking mode & grounding** — extended reasoning and Google Search for analysis
+- 14 aspect ratios (including panoramic) and temperature control
 - Async-first architecture with full Pydantic validation
-- Self-documenting tools with built-in model selection guidance
+- EXIF metadata embedding (prompt, model, timestamp)
 
 ## Quick Start
 
@@ -104,109 +111,93 @@ Restart Claude Desktop after saving.
 
 ### Use
 
-Ask Claude to generate, edit, or analyze images — the tools are available automatically.
+Ask Claude to generate, edit, or analyze images — all 21 tools are available automatically.
 
 ## Available Tools
 
-### generate_image
+### Generation
 
-Generate an image from a text prompt.
+| Tool | Description |
+|------|-------------|
+| `generate_image` | Generate images from text (6 models, 14 aspect ratios, quality presets, parallel multi-image) |
+| `edit_image` | Modify existing images with text prompts |
+| `remove_background` | Remove image background (transparent or white) |
+| `transform_image` | Crop, resize, rotate, flip, blur, sharpen, grayscale, or watermark |
+| `batch_generate` | Generate up to 10 images in parallel from multiple prompts |
 
-**Parameters:**
-- `prompt` (required): Text description of the image
-- `output_filename` (optional): Custom filename
-- `aspect_ratio` (optional): Image dimensions (default: "1:1")
-- `temperature` (optional): Creativity level 0.0-2.0 (default: 0.7)
-- `model` (optional): Model to use (default: "gemini-2.5-flash-image")
-- `safety_setting` (optional): Content safety filter — "preset:strict" (default) or "preset:relaxed"
+### Analysis
 
-**Example prompts:**
-> Generate an image of a futuristic city at sunset with flying cars in 16:9 widescreen
+| Tool | Description |
+|------|-------------|
+| `analyze_image` | AI-powered image description with optional grounding |
+| `extract_text` | OCR — extract text with confidence levels |
+| `detect_objects` | Detect objects with bounding boxes |
+| `compare_images` | Compare 2-10 images for differences |
 
-> Create a watercolor painting of a cat sleeping on a bookshelf, use the pro model
+### Utility
 
-> Generate a minimalist logo for a coffee shop called "Bean There" in square format with high creativity
+| Tool | Description |
+|------|-------------|
+| `optimize_prompt` | Enhance prompts for better image generation (14 styles) |
+| `estimate_cost` | Calculate generation costs per model/operation |
+| `list_templates` | Browse 24 curated prompt templates across 10 categories |
+| `apply_template` | Fill a template with your subject for a ready-to-use prompt |
+| `list_available_models` | Model capabilities, speed, quality, and selection guidance |
+| `get_server_info` | Server configuration and status |
 
-### edit_image
+### History
 
-Edit an existing image with a text prompt.
+| Tool | Description |
+|------|-------------|
+| `list_history` | Browse generation history with pagination and filtering |
+| `get_generation_details` | Get full details of a specific generation |
 
-**Parameters:**
-- `prompt` (required): Description of desired changes
-- `input_image_path` (required): Path to the image to edit
-- `output_filename` (optional): Custom filename for edited image
-- `temperature` (optional): Creativity level 0.0-2.0 (default: 0.7)
+### Vertex AI (Optional)
 
-**Example prompts:**
-> Edit this image and add a rainbow in the sky
+| Tool | Description |
+|------|-------------|
+| `upscale_image` | Upscale images x2 or x4 (requires Vertex AI) |
+| `advanced_edit` | Inpainting, outpainting, background swap, style transfer (requires Vertex AI) |
 
-> Remove the background and replace it with a gradient
+## Model Selection
 
-> Make this photo look like it was taken during golden hour
+PixelForge supports **per-request model switching** with 6 models:
 
-### analyze_image
-
-Get an AI-powered description and analysis of an image.
-
-**Parameters:**
-- `image_path` (required): Path to the image to analyze
-- `prompt` (optional): Custom analysis prompt — directs the AI to focus on specific aspects instead of giving a general description
-
-**Example prompts:**
-> Analyze this image and describe what you see
-
-> What's in this screenshot?
-
-> Extract all visible text from this image (OCR)
-
-> Evaluate this image for web accessibility — describe alt text, contrast issues, and readability
-
-> List the dominant colors and their approximate hex values in this design
-
-### list_available_models
-
-List all available Gemini image generation models with capabilities and selection guidance.
-
-**Example prompts:**
-> What image generation models are available?
-
-> Which model should I use for photorealistic images?
-
-### get_server_info
-
-Get server configuration and status information.
-
-**Example prompts:**
-> Show me the PixelForge server configuration
-
-> What's the default model and output directory?
-
-## Model Selection & Switching
-
-PixelForge supports **per-request model switching** — choose the right model for your task:
+### Gemini Models (via Gemini API)
 
 | Use case | Model | Why |
 |----------|-------|-----|
 | Fast iterations | `gemini-2.5-flash-image` (default) | Cheapest, lowest latency |
 | Panoramic & grounded | `gemini-3.1-flash-image-preview` | 1:4/4:1/1:8/8:1, web+image grounding |
-| Fast high-res (4K) | `gemini-3.1-flash-image-preview` | 4-6s vs Pro's 8-12s, 512px-4K |
-| Max text fidelity | `gemini-3-pro-image-preview` | ~94% accuracy (vs Flash ~90%) |
-| Complex multi-turn edits | `gemini-3-pro-image-preview` | Deep reasoning, advanced editing |
+| Max text fidelity | `gemini-3-pro-image-preview` | ~94% accuracy, complex multi-turn edits |
 
-**Example prompts:**
-> Generate a quick concept sketch of a logo
+### Imagen 4 Models (via Gemini API)
 
-Uses default fast model (`gemini-2.5-flash-image`).
+| Use case | Model | Why |
+|----------|-------|-----|
+| Cost-effective batch | `imagen-4.0-generate-001` | $0.04/img, excellent quality |
+| Cheapest generation | `imagen-4.0-fast-generate-001` | $0.02/img, fastest |
+| Maximum quality | `imagen-4.0-ultra-generate-001` | $0.06/img, best output |
 
-> Generate a photorealistic portrait with intricate details using the pro model in 16:9
+### Quality Presets
 
-Switches to quality model (`gemini-3-pro-image-preview`).
+Instead of choosing a model manually, use quality presets:
 
-**Best Practices:**
-1. Start with `gemini-2.5-flash-image` (default) for rapid prototyping
-2. Use `gemini-3.1-flash-image-preview` for panoramic ratios and grounded generation
-3. Use `gemini-3-pro-image-preview` when text must be pixel-perfect or edits are multi-turn
-4. Ask Claude to *"list available models"* for detailed model metadata
+```
+generate_image(prompt="...", quality="fast")      # gemini-2.5-flash-image
+generate_image(prompt="...", quality="balanced")   # gemini-3.1-flash-image-preview + 1K
+generate_image(prompt="...", quality="quality")    # gemini-3-pro-image-preview + 2K
+```
+
+## Vertex AI (Optional)
+
+For advanced features like image upscaling and specialized editing modes:
+
+1. Set up a Google Cloud project with Vertex AI enabled
+2. Set the environment variable: `GOOGLE_CLOUD_PROJECT=your-project-id`
+3. Install the Vertex AI dependency: `pip install pixelforge-mcp[vertex]`
+
+PixelForge auto-detects Vertex AI credentials and unlocks `upscale_image` and `advanced_edit` tools.
 
 ## Supported Aspect Ratios
 
@@ -251,6 +242,14 @@ Check that pixelforge-mcp is installed:
 pipx list | grep pixelforge
 ```
 
+### Vertex AI features not available
+
+Ensure `GOOGLE_CLOUD_PROJECT` is set and `google-cloud-aiplatform` is installed:
+
+```bash
+pip install pixelforge-mcp[vertex]
+```
+
 ## Documentation
 
 - [Configuration Guide](docs/configuration.md) — detailed setup and environment options
@@ -266,7 +265,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code standards, an
 
 ## Acknowledgments
 
-Built with [FastMCP](https://github.com/jlowin/fastmcp), [Pydantic](https://docs.pydantic.dev/), and [gemini-imagen](https://github.com/aviadr1/gemini-imagen).
+Built with [FastMCP](https://github.com/jlowin/fastmcp), [Pydantic](https://docs.pydantic.dev/), and [google-genai](https://github.com/googleapis/python-genai).
 
 ## Author
 
