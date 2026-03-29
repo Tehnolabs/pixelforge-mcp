@@ -45,7 +45,7 @@ PERSON_GENERATION_OPTIONS = ["allow", "adults_only", "block"]
 PERSON_GENERATION_SDK_MAP = {
     "allow": "ALLOW_ALL",
     "adults_only": "ALLOW_ADULT",
-    "block": "ALLOW_NONE",
+    "block": "DONT_ALLOW",
 }
 
 # Prompt optimization style presets
@@ -222,7 +222,9 @@ class GenerateImageInput(BaseModel):
         None,
         description="Controls whether people appear in generated images. "
         '"allow" = anyone, "adults_only" = no minors (child safety), '
-        '"block" = no people at all',
+        '"block" = no people at all. '
+        "Only supported with Imagen models (imagen-4.0-*). "
+        "Ignored for Gemini models with a warning.",
     )
     reference_images: Optional[List[str]] = Field(
         None,

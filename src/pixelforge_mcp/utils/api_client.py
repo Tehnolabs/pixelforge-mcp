@@ -106,6 +106,19 @@ class ImagenAPIClient:
         "imagen-4.0-fast-generate-001",
     }
 
+    # Gemini → Imagen model mapping for person_generation auto-routing.
+    # person_generation is only supported by Imagen's generate_images API,
+    # so we map each Gemini model to its closest Imagen equivalent.
+    GEMINI_TO_IMAGEN_MAP = {
+        "gemini-2.5-flash-image": "imagen-4.0-fast-generate-001",
+        "gemini-3.1-flash-image-preview": "imagen-4.0-generate-001",
+        "gemini-3-pro-image-preview": "imagen-4.0-ultra-generate-001",
+    }
+
+    # Aspect ratios supported by Imagen's generate_images API.
+    # Gemini supports more ratios (panoramic, etc.) that Imagen doesn't.
+    IMAGEN_ASPECT_RATIOS = {"1:1", "3:4", "4:3", "9:16", "16:9"}
+
     def __init__(
         self,
         model_name: str = "gemini-2.5-flash-image",
@@ -378,8 +391,6 @@ class ImagenAPIClient:
         try:
             from google.genai import types
 
-            from .validation import PERSON_GENERATION_SDK_MAP
-
             client = self._get_genai_client()
 
             # Build ImageConfig
@@ -388,10 +399,10 @@ class ImagenAPIClient:
                 image_config_params["aspect_ratio"] = aspect_ratio
             if image_size:
                 image_config_params["image_size"] = image_size
-            if person_generation:
-                sdk_value = PERSON_GENERATION_SDK_MAP.get(person_generation)
-                if sdk_value:
-                    image_config_params["person_generation"] = sdk_value
+            # NOTE: person_generation is NOT passed to ImageConfig.
+            # The Gemini API (generate_content) does not support it —
+            # the SDK raises ValueError in _ImageConfig_to_mldev().
+            # Only Imagen (generate_images / GenerateImagesConfig) supports it.
 
             # Build GenerateContentConfig
             config_params: Dict[str, Any] = {
@@ -453,21 +464,32 @@ class ImagenAPIClient:
                         "timestamp": datetime.now().isoformat(),
                     },
                 )
+                data: Dict[str, Any] = {
+                    "model": model,
+                    "aspect_ratio": aspect_ratio,
+                    "temperature": temperature,
+                    "image_size": image_size,
+                    "person_generation": None,
+                    "reference_images_count": (
+                        len(reference_images) if reference_images else 0
+                    ),
+                }
+                if person_generation:
+                    data["warnings"] = [
+                        f"person_generation='{person_generation}' was ignored"
+                        " — could not auto-route to Imagen because"
+                        " incompatible parameters were set (non-default"
+                        " temperature, reference_images, thinking_budget,"
+                        " non-default safety_setting, or Imagen-unsupported"
+                        " aspect_ratio). Remove those parameters or use an"
+                        " Imagen model directly to enable person_generation."
+                    ]
                 return GenerationResult(
                     success=True,
                     output=(f"Image generated successfully at {output_path}"),
                     images=images,
                     image_paths=[str(output_path)],
-                    data={
-                        "model": model,
-                        "aspect_ratio": aspect_ratio,
-                        "temperature": temperature,
-                        "image_size": image_size,
-                        "person_generation": person_generation,
-                        "reference_images_count": (
-                            len(reference_images) if reference_images else 0
-                        ),
-                    },
+                    data=data,
                 )
             else:
                 return GenerationResult(
@@ -585,10 +607,14 @@ class ImagenAPIClient:
         Auto-routes to the correct SDK method based on model:
         - Imagen 4 models → client.models.generate_images()
         - Gemini models → client.aio.models.generate_content()
+
+        Smart routing: when person_generation is set on a Gemini model,
+        auto-routes to the equivalent Imagen model if no Gemini-exclusive
+        parameters (temperature, reference_images, thinking_budget) conflict.
         """
         use_model = model or self.model_name
 
-        # Auto-route: Imagen 4 uses a different API
+        # Direct Imagen route
         if use_model in self.IMAGEN4_MODELS:
             return await self._generate_via_imagen4(
                 prompt=prompt,
@@ -600,6 +626,49 @@ class ImagenAPIClient:
                 output_format=output_format,
             )
 
+        # Smart auto-route: person_generation requires Imagen API.
+        # Route to Imagen if no Gemini-exclusive params would be lost.
+        # Note: temperature defaults to 0.7 and safety_setting defaults
+        # to "preset:strict" in the MCP tool — only treat non-defaults
+        # as conflicts so auto-routing works for the common case.
+        if person_generation:
+            conflicts = []
+            if temperature is not None and temperature != 0.7:
+                conflicts.append("temperature")
+            if reference_images:
+                conflicts.append("reference_images")
+            if thinking_budget is not None and thinking_budget > 0:
+                conflicts.append("thinking_budget")
+            if safety_setting and safety_setting != "preset:strict":
+                conflicts.append("safety_setting")
+            if aspect_ratio and aspect_ratio not in self.IMAGEN_ASPECT_RATIOS:
+                conflicts.append(f"aspect_ratio={aspect_ratio}")
+
+            if not conflicts:
+                imagen_model = self.GEMINI_TO_IMAGEN_MAP.get(
+                    use_model, "imagen-4.0-generate-001"
+                )
+                result = await self._generate_via_imagen4(
+                    prompt=prompt,
+                    output_path=output_path,
+                    model=imagen_model,
+                    aspect_ratio=aspect_ratio,
+                    image_size=image_size,
+                    person_generation=person_generation,
+                    output_format=output_format,
+                )
+                if result.success and result.data:
+                    result.data["auto_routed"] = {
+                        "from": use_model,
+                        "to": imagen_model,
+                        "reason": (
+                            "person_generation requires Imagen API; "
+                            f"routed from {use_model} to {imagen_model}."
+                        ),
+                    }
+                return result
+
+        # Gemini path — person_generation (if set) will be ignored with warning
         return await self._generate_via_sdk(
             prompt=prompt,
             output_path=output_path,
@@ -1137,7 +1206,7 @@ class ImagenAPIClient:
                     "complex_scenes": "moderate",
                     "editing": "basic",
                     "resolution": "1K",
-                    "person_generation": True,
+                    "person_generation": False,
                 },
                 "temperature": {
                     "min": 0.0,
@@ -1167,7 +1236,7 @@ class ImagenAPIClient:
                     "reference_inputs": "6 objects + 5 characters",
                     "thinking_process": True,
                     "grounding": "web search",
-                    "person_generation": True,
+                    "person_generation": False,
                 },
                 "temperature": {
                     "min": 0.0,
@@ -1197,7 +1266,7 @@ class ImagenAPIClient:
                     "reference_inputs": ("up to 14 objects + 5 characters"),
                     "thinking_process": True,
                     "grounding": ("web search + Google Image Search"),
-                    "person_generation": True,
+                    "person_generation": False,
                 },
                 "temperature": {
                     "min": 0.0,
@@ -1220,6 +1289,30 @@ class ImagenAPIClient:
                 ],
                 "capabilities": {
                     "text_rendering": "good",
+                    "complex_scenes": "excellent",
+                    "editing": False,
+                    "resolution": "1K/2K",
+                    "person_generation": True,
+                },
+                "temperature": None,
+                "note": "Uses a separate API (generate_images). "
+                "No editing, no temperature control.",
+            },
+            {
+                "name": "imagen-4.0-ultra-generate-001",
+                "nickname": "Imagen 4 Ultra",
+                "speed": "moderate",
+                "quality": "excellent",
+                "default": False,
+                "description": "Highest quality Imagen model. "
+                "~$0.06/img. Best for premium output.",
+                "best_for": [
+                    "Maximum image quality",
+                    "Premium production assets",
+                    "When quality matters more than cost",
+                ],
+                "capabilities": {
+                    "text_rendering": "excellent",
                     "complex_scenes": "excellent",
                     "editing": False,
                     "resolution": "1K/2K",

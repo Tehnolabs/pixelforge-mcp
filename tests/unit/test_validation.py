@@ -658,9 +658,23 @@ class TestConstants:
             assert size == size.upper()
 
     def test_person_generation_sdk_map_values(self):
-        """Test SDK map values are uppercase SDK format."""
+        """Test SDK map values match PersonGeneration enum members."""
+        from google.genai.types import PersonGeneration
+
+        valid_members = {
+            PersonGeneration.ALLOW_ALL,
+            PersonGeneration.ALLOW_ADULT,
+            PersonGeneration.DONT_ALLOW,
+        }
         for sdk_val in PERSON_GENERATION_SDK_MAP.values():
             assert sdk_val == sdk_val.upper()
+            assert (
+                sdk_val in valid_members
+            ), f"{sdk_val} is not a valid PersonGeneration member"
+
+    def test_person_generation_block_maps_to_dont_allow(self):
+        """Test 'block' maps to DONT_ALLOW (not ALLOW_NONE)."""
+        assert PERSON_GENERATION_SDK_MAP["block"] == "DONT_ALLOW"
 
     def test_prompt_styles_defined(self):
         """Test prompt styles list is populated."""
