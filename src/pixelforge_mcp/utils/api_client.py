@@ -115,6 +115,10 @@ class ImagenAPIClient:
         "gemini-3-pro-image-preview": "imagen-4.0-ultra-generate-001",
     }
 
+    # Aspect ratios supported by Imagen's generate_images API.
+    # Gemini supports more ratios (panoramic, etc.) that Imagen doesn't.
+    IMAGEN_ASPECT_RATIOS = {"1:1", "3:4", "4:3", "9:16", "16:9"}
+
     def __init__(
         self,
         model_name: str = "gemini-2.5-flash-image",
@@ -474,10 +478,11 @@ class ImagenAPIClient:
                     data["warnings"] = [
                         f"person_generation='{person_generation}' was ignored"
                         " — could not auto-route to Imagen because"
-                        " Gemini-exclusive parameters (temperature,"
-                        " reference_images, or thinking_budget) were also"
-                        " set. Remove those parameters or use an Imagen"
-                        " model directly to enable person_generation."
+                        " incompatible parameters were set (non-default"
+                        " temperature, reference_images, thinking_budget,"
+                        " non-default safety_setting, or Imagen-unsupported"
+                        " aspect_ratio). Remove those parameters or use an"
+                        " Imagen model directly to enable person_generation."
                     ]
                 return GenerationResult(
                     success=True,
@@ -623,14 +628,21 @@ class ImagenAPIClient:
 
         # Smart auto-route: person_generation requires Imagen API.
         # Route to Imagen if no Gemini-exclusive params would be lost.
+        # Note: temperature defaults to 0.7 and safety_setting defaults
+        # to "preset:strict" in the MCP tool — only treat non-defaults
+        # as conflicts so auto-routing works for the common case.
         if person_generation:
             conflicts = []
-            if temperature is not None:
+            if temperature is not None and temperature != 0.7:
                 conflicts.append("temperature")
             if reference_images:
                 conflicts.append("reference_images")
             if thinking_budget is not None and thinking_budget > 0:
                 conflicts.append("thinking_budget")
+            if safety_setting and safety_setting != "preset:strict":
+                conflicts.append("safety_setting")
+            if aspect_ratio and aspect_ratio not in self.IMAGEN_ASPECT_RATIOS:
+                conflicts.append(f"aspect_ratio={aspect_ratio}")
 
             if not conflicts:
                 imagen_model = self.GEMINI_TO_IMAGEN_MAP.get(
@@ -1277,6 +1289,30 @@ class ImagenAPIClient:
                 ],
                 "capabilities": {
                     "text_rendering": "good",
+                    "complex_scenes": "excellent",
+                    "editing": False,
+                    "resolution": "1K/2K",
+                    "person_generation": True,
+                },
+                "temperature": None,
+                "note": "Uses a separate API (generate_images). "
+                "No editing, no temperature control.",
+            },
+            {
+                "name": "imagen-4.0-ultra-generate-001",
+                "nickname": "Imagen 4 Ultra",
+                "speed": "moderate",
+                "quality": "excellent",
+                "default": False,
+                "description": "Highest quality Imagen model. "
+                "~$0.06/img. Best for premium output.",
+                "best_for": [
+                    "Maximum image quality",
+                    "Premium production assets",
+                    "When quality matters more than cost",
+                ],
+                "capabilities": {
+                    "text_rendering": "excellent",
                     "complex_scenes": "excellent",
                     "editing": False,
                     "resolution": "1K/2K",
