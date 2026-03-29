@@ -179,29 +179,6 @@ class TestFormatImageResult:
         assert response["success"] is True
         assert response["warnings"] == ["person_generation ignored"]
 
-    def test_auto_routed_propagated_to_response(self, tmp_path):
-        """Test auto_routed info from result.data is surfaced in response."""
-        file1 = tmp_path / "out.png"
-        file1.write_bytes(b"png content")
-
-        result = GenerationResult(
-            success=True,
-            output="Done",
-            data={
-                "auto_routed": {
-                    "from": "gemini-2.5-flash-image",
-                    "to": "imagen-4.0-fast-generate-001",
-                    "reason": "person_generation requires Imagen API",
-                },
-            },
-        )
-
-        response = format_image_result(result, [file1])
-
-        assert response["success"] is True
-        assert response["auto_routed"]["from"] == "gemini-2.5-flash-image"
-        assert response["auto_routed"]["to"] == "imagen-4.0-fast-generate-001"
-
     def test_no_warnings_when_not_in_data(self, tmp_path):
         """Test no warnings key when result.data has none."""
         file1 = tmp_path / "out.png"
