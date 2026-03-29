@@ -108,6 +108,10 @@ def format_image_result(
     }
     if result.data:
         response["details"] = result.data
+        if "warnings" in result.data:
+            response["warnings"] = result.data["warnings"]
+        if "auto_routed" in result.data:
+            response["auto_routed"] = result.data["auto_routed"]
     return response
 
 
@@ -152,7 +156,9 @@ async def generate_image(
         number_of_images: Generate 1-4 variations (default: 1)
         output_format: File format: "png", "jpeg", or "webp"
         person_generation: People in images: "allow", "adults_only"
-            (no minors), or "block" (no people)
+            (no minors), or "block" (no people). Auto-routes to
+            Imagen when possible; ignored with warning if
+            Gemini-exclusive params (temperature, etc.) conflict.
         reference_images: Paths to reference images for style/character
             consistency (up to 14 images)
         thinking_budget: Thinking budget for extended reasoning
@@ -1563,7 +1569,7 @@ def get_server_info() -> dict:
             "resolution_control": "1K/2K/4K via image_size",
             "multi_image": "1-4 variations via number_of_images",
             "output_formats": "png, jpeg, webp",
-            "person_generation": "allow, adults_only, block",
+            "person_generation": "allow, adults_only, block (auto-routes to Imagen)",
             "reference_images": "Up to 14 style/character refs",
             "prompt_optimization": "AI-enhanced prompts",
             "ocr": "Text extraction from images",
