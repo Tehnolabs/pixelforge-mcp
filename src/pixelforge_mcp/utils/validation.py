@@ -223,8 +223,8 @@ class GenerateImageInput(BaseModel):
         description="Controls whether people appear in generated images. "
         '"allow" = anyone, "adults_only" = no minors (child safety), '
         '"block" = no people at all. '
-        "Only supported with Imagen models (imagen-4.0-*). "
-        "Ignored for Gemini models with a warning.",
+        "Only enforced with Imagen models (imagen-4.0-*). "
+        "Gemini has built-in person restrictions but no API-level control.",
     )
     reference_images: Optional[List[str]] = Field(
         None,
