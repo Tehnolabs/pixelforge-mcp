@@ -552,7 +552,8 @@ class ImagenAPIClient:
             )
 
             if response.generated_images:
-                img = response.generated_images[0].image
+                genai_img = response.generated_images[0].image
+                img = Image.open(BytesIO(genai_img.image_bytes))
                 self._save_image(img, output_path, output_format)
                 self._embed_metadata(
                     output_path,
@@ -1062,7 +1063,8 @@ class ImagenAPIClient:
             )
 
             if response.generated_images:
-                result_img = response.generated_images[0].image
+                genai_img = response.generated_images[0].image
+                result_img = Image.open(BytesIO(genai_img.image_bytes))
                 self._save_image(result_img, output_path, output_format)
                 return GenerationResult(
                     success=True,
@@ -1154,7 +1156,8 @@ class ImagenAPIClient:
             )
 
             if response.generated_images:
-                result_img = response.generated_images[0].image
+                genai_img = response.generated_images[0].image
+                result_img = Image.open(BytesIO(genai_img.image_bytes))
                 self._save_image(result_img, output_path, output_format)
                 return GenerationResult(
                     success=True,
