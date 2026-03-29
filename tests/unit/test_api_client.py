@@ -303,7 +303,7 @@ class TestImagenAPIClient:
 
         models = result.data["models"]
         assert isinstance(models, list)
-        assert len(models) == 5
+        assert len(models) == 6
 
         model_names = [m["name"] for m in models]
         assert "gemini-2.5-flash-image" in model_names
@@ -1257,10 +1257,8 @@ class TestImagen4:
 class TestPersonGenerationAutoRouting:
     """Tests for smart auto-routing when person_generation is set."""
 
-    @pytest.mark.asyncio
-    async def test_auto_routes_to_imagen_when_no_conflicts(self, tmp_path):
-        """When person_generation is set with no Gemini-exclusive params,
-        auto-route to Imagen model."""
+    def _make_imagen_mock_client(self):
+        """Helper: create mock client for Imagen generate_images path."""
         test_img = Image.new("RGB", (10, 10), color="blue")
         buf = io.BytesIO()
         test_img.save(buf, format="PNG")
@@ -1270,30 +1268,10 @@ class TestPersonGenerationAutoRouting:
 
         mock_client = Mock()
         mock_client.models.generate_images = Mock(return_value=mock_response)
+        return mock_client
 
-        client = ImagenAPIClient(api_key="test-key")
-        client._genai_client = mock_client
-        output_path = tmp_path / "out.png"
-
-        result = await client.generate(
-            prompt="test image",
-            output_path=output_path,
-            person_generation="block",
-            # No temperature, reference_images, or thinking_budget
-        )
-
-        assert result.success is True
-        assert result.data is not None
-        assert "auto_routed" in result.data
-        assert result.data["auto_routed"]["from"] == "gemini-2.5-flash-image"
-        assert result.data["auto_routed"]["to"] == "imagen-4.0-fast-generate-001"
-        # Verify generate_images was called (Imagen path), not generate_content
-        mock_client.models.generate_images.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_no_auto_route_when_temperature_set(self, tmp_path):
-        """When person_generation + temperature are both set,
-        fall through to Gemini path with warning."""
+    def _make_gemini_mock_client(self):
+        """Helper: create mock client for Gemini generate_content path."""
         test_img = Image.new("RGB", (10, 10), color="red")
         buf = io.BytesIO()
         test_img.save(buf, format="PNG")
@@ -1307,6 +1285,13 @@ class TestPersonGenerationAutoRouting:
 
         mock_client = Mock()
         mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+        return mock_client
+
+    @pytest.mark.asyncio
+    async def test_auto_routes_to_imagen_when_no_conflicts(self, tmp_path):
+        """When person_generation is set with no Gemini-exclusive params,
+        auto-route to Imagen model."""
+        mock_client = self._make_imagen_mock_client()
 
         client = ImagenAPIClient(api_key="test-key")
         client._genai_client = mock_client
@@ -1316,7 +1301,50 @@ class TestPersonGenerationAutoRouting:
             prompt="test image",
             output_path=output_path,
             person_generation="block",
-            temperature=0.5,  # Gemini-exclusive param → conflict
+        )
+
+        assert result.success is True
+        assert result.data is not None
+        assert "auto_routed" in result.data
+        assert result.data["auto_routed"]["from"] == "gemini-2.5-flash-image"
+        assert result.data["auto_routed"]["to"] == "imagen-4.0-fast-generate-001"
+        mock_client.models.generate_images.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_auto_routes_with_default_temperature(self, tmp_path):
+        """Default temperature (0.7) should NOT block auto-routing."""
+        mock_client = self._make_imagen_mock_client()
+
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+        output_path = tmp_path / "out.png"
+
+        result = await client.generate(
+            prompt="test image",
+            output_path=output_path,
+            person_generation="block",
+            temperature=0.7,  # Default — should not conflict
+        )
+
+        assert result.success is True
+        assert result.data is not None
+        assert "auto_routed" in result.data
+        mock_client.models.generate_images.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_no_auto_route_when_nondefault_temperature(self, tmp_path):
+        """Non-default temperature blocks auto-routing → Gemini with warning."""
+        mock_client = self._make_gemini_mock_client()
+
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+        output_path = tmp_path / "out.png"
+
+        result = await client.generate(
+            prompt="test image",
+            output_path=output_path,
+            person_generation="block",
+            temperature=0.5,  # Non-default → conflict
         )
 
         assert result.success is True
@@ -1324,8 +1352,69 @@ class TestPersonGenerationAutoRouting:
         assert "auto_routed" not in result.data
         assert "warnings" in result.data
         assert "ignored" in result.data["warnings"][0]
-        # Verify generate_content was called (Gemini path)
         mock_client.aio.models.generate_content.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_no_auto_route_when_nondefault_safety(self, tmp_path):
+        """Non-default safety_setting blocks auto-routing."""
+        mock_client = self._make_gemini_mock_client()
+
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+        output_path = tmp_path / "out.png"
+
+        result = await client.generate(
+            prompt="test image",
+            output_path=output_path,
+            person_generation="block",
+            safety_setting="preset:relaxed",  # Non-default → conflict
+        )
+
+        assert result.success is True
+        assert result.data is not None
+        assert "auto_routed" not in result.data
+        assert "warnings" in result.data
+
+    @pytest.mark.asyncio
+    async def test_no_auto_route_when_incompatible_aspect_ratio(self, tmp_path):
+        """Imagen-incompatible aspect ratio blocks auto-routing."""
+        mock_client = self._make_gemini_mock_client()
+
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+        output_path = tmp_path / "out.png"
+
+        result = await client.generate(
+            prompt="test image",
+            output_path=output_path,
+            person_generation="block",
+            aspect_ratio="21:9",  # Not supported by Imagen
+        )
+
+        assert result.success is True
+        assert result.data is not None
+        assert "auto_routed" not in result.data
+        assert "warnings" in result.data
+
+    @pytest.mark.asyncio
+    async def test_auto_route_with_imagen_compatible_ratio(self, tmp_path):
+        """Imagen-compatible aspect ratio allows auto-routing."""
+        mock_client = self._make_imagen_mock_client()
+
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+        output_path = tmp_path / "out.png"
+
+        result = await client.generate(
+            prompt="test image",
+            output_path=output_path,
+            person_generation="block",
+            aspect_ratio="16:9",  # Supported by Imagen
+        )
+
+        assert result.success is True
+        assert result.data is not None
+        assert "auto_routed" in result.data
 
     @pytest.mark.asyncio
     async def test_auto_route_model_mapping(self):
@@ -1336,6 +1425,17 @@ class TestPersonGenerationAutoRouting:
             "gemini-3.1-flash-image-preview": "imagen-4.0-generate-001",
             "gemini-3-pro-image-preview": "imagen-4.0-ultra-generate-001",
         }
+
+    @pytest.mark.asyncio
+    async def test_imagen_aspect_ratios_defined(self):
+        """Test Imagen aspect ratio set covers common ratios."""
+        client = ImagenAPIClient()
+        assert "1:1" in client.IMAGEN_ASPECT_RATIOS
+        assert "16:9" in client.IMAGEN_ASPECT_RATIOS
+        assert "9:16" in client.IMAGEN_ASPECT_RATIOS
+        # Panoramic ratios should NOT be in Imagen set
+        assert "21:9" not in client.IMAGEN_ASPECT_RATIOS
+        assert "1:4" not in client.IMAGEN_ASPECT_RATIOS
 
     @pytest.mark.asyncio
     async def test_no_auto_route_for_imagen_models(self, tmp_path):
@@ -1357,6 +1457,5 @@ class TestPersonGenerationAutoRouting:
             person_generation="block",
         )
 
-        # Direct Imagen route, no auto_routed metadata
         mock_client.models.generate_images.assert_called_once()
         assert result.data is None or "auto_routed" not in (result.data or {})
