@@ -28,13 +28,16 @@ class MaskedStr(SecretStr):
 class ImagenConfig(BaseModel):
     """Gemini Imagen CLI configuration."""
 
-    api_key: Optional[MaskedStr] = Field(None, description="Google API key")
+    api_key: Optional[MaskedStr] = Field(default=None, description="Google API key")
     default_model: str = Field(
-        "gemini-2.5-flash-image", description="Default image generation model"
+        default="gemini-2.5-flash-image",
+        description="Default image generation model",
     )
-    default_aspect_ratio: str = Field("1:1", description="Default aspect ratio")
-    default_temperature: float = Field(0.7, description="Default temperature")
-    safety_setting: str = Field("preset:strict", description="Safety filter preset")
+    default_aspect_ratio: str = Field(default="1:1", description="Default aspect ratio")
+    default_temperature: float = Field(default=0.7, description="Default temperature")
+    safety_setting: str = Field(
+        default="preset:strict", description="Safety filter preset"
+    )
 
     @field_validator("default_temperature")
     @classmethod
@@ -49,7 +52,8 @@ class StorageConfig(BaseModel):
     """Storage configuration."""
 
     output_dir: Path = Field(
-        Path("./generated_images"), description="Directory for generated images"
+        default=Path("./generated_images"),
+        description="Directory for generated images",
     )
 
     @field_validator("output_dir")
@@ -63,26 +67,30 @@ class StorageConfig(BaseModel):
 class ServerConfig(BaseModel):
     """MCP server configuration."""
 
-    name: str = Field("pixelforge-mcp", description="Server name")
-    version: str = Field("0.5.3", description="Server version")
-    log_level: str = Field("INFO", description="Logging level")
+    name: str = Field(default="pixelforge-mcp", description="Server name")
+    version: str = Field(default="0.5.4", description="Server version")
+    log_level: str = Field(default="INFO", description="Logging level")
 
 
 class VertexConfig(BaseModel):
     """Optional Vertex AI configuration for advanced features."""
 
-    project_id: Optional[str] = Field(None, description="Google Cloud project ID")
-    location: str = Field("us-central1", description="Vertex AI region")
-    enabled: bool = Field(False, description="Whether Vertex AI features are enabled")
+    project_id: Optional[str] = Field(
+        default=None, description="Google Cloud project ID"
+    )
+    location: str = Field(default="us-central1", description="Vertex AI region")
+    enabled: bool = Field(
+        default=False, description="Whether Vertex AI features are enabled"
+    )
 
 
 class Config(BaseModel):
     """Main configuration."""
 
-    imagen: ImagenConfig = Field(default_factory=ImagenConfig)
-    storage: StorageConfig = Field(default_factory=StorageConfig)
-    server: ServerConfig = Field(default_factory=ServerConfig)
-    vertex: VertexConfig = Field(default_factory=VertexConfig)
+    imagen: ImagenConfig = Field(default_factory=lambda: ImagenConfig())
+    storage: StorageConfig = Field(default_factory=lambda: StorageConfig())
+    server: ServerConfig = Field(default_factory=lambda: ServerConfig())
+    vertex: VertexConfig = Field(default_factory=lambda: VertexConfig())
 
     @classmethod
     def load(cls, config_path: Optional[Path] = None) -> "Config":

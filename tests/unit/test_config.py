@@ -8,6 +8,7 @@ import yaml
 from pixelforge_mcp.config import (
     Config,
     ImagenConfig,
+    MaskedStr,
     ServerConfig,
     StorageConfig,
     get_config,
@@ -75,7 +76,7 @@ class TestServerConfig:
         """Test ServerConfig uses correct defaults."""
         config = ServerConfig()
         assert config.name == "pixelforge-mcp"
-        assert config.version == "0.5.3"
+        assert config.version == "0.5.4"
         assert config.log_level == "INFO"
 
 
@@ -159,10 +160,12 @@ class TestConfig:
 
         config = Config(
             imagen=ImagenConfig(
-                api_key="test-key",
+                api_key=MaskedStr("test-key"),
                 default_temperature=0.8,
             ),
-            server=ServerConfig(log_level="DEBUG"),
+            server=ServerConfig(
+                name="pixelforge-mcp", version="0.5.4", log_level="DEBUG"
+            ),
         )
 
         config.save(config_file)
