@@ -1176,9 +1176,11 @@ class TestImagen4:
     async def test_imagen4_generate_success(self, tmp_path):
         """Test successful Imagen 4 generation."""
         test_img = Image.new("RGB", (10, 10), color="green")
+        buf = io.BytesIO()
+        test_img.save(buf, format="PNG")
 
         mock_generated = Mock()
-        mock_generated.image = test_img
+        mock_generated.image = Mock(image_bytes=buf.getvalue())
         mock_response = Mock()
         mock_response.generated_images = [mock_generated]
 
@@ -1206,9 +1208,11 @@ class TestImagen4:
     async def test_imagen4_auto_routing(self, tmp_path):
         """Test that generate() auto-routes Imagen 4 models."""
         test_img = Image.new("RGB", (10, 10), color="blue")
+        buf = io.BytesIO()
+        test_img.save(buf, format="PNG")
 
         mock_generated = Mock()
-        mock_generated.image = test_img
+        mock_generated.image = Mock(image_bytes=buf.getvalue())
         mock_response = Mock()
         mock_response.generated_images = [mock_generated]
 
