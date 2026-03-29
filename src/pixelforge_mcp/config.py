@@ -64,7 +64,7 @@ class ServerConfig(BaseModel):
     """MCP server configuration."""
 
     name: str = Field("pixelforge-mcp", description="Server name")
-    version: str = Field("0.5.2", description="Server version")
+    version: str = Field("0.5.3", description="Server version")
     log_level: str = Field("INFO", description="Logging level")
 
 
