@@ -1,6 +1,6 @@
 # PixelForge MCP - Development Guide
 
-MCP server for AI-powered image generation, editing, analysis, and transformation using Google's Gemini and Imagen 4 models.
+MCP server for AI-powered image generation, editing, analysis, and transformation using Google's Gemini image models.
 
 ## Prerequisites
 
@@ -93,12 +93,12 @@ Any of these environment variables will work:
 | `GOOGLE_GENERATIVE_AI_API_KEY` | Alternative |
 | `GEMINI_API_KEY` | Alternative |
 
-## Available Tools (21)
+## Available Tools (19)
 
 ### Generation
 | Tool | Description |
 |------|-------------|
-| `generate_image` | Generate images from text (6 models, quality presets, parallel multi-image, thinking mode) |
+| `generate_image` | Generate images from text (4 models, quality presets, parallel multi-image, thinking mode) |
 | `edit_image` | Modify existing images with text prompts |
 | `remove_background` | Remove image background |
 | `transform_image` | Crop, resize, rotate, flip, blur, sharpen, grayscale, watermark |
@@ -107,10 +107,12 @@ Any of these environment variables will work:
 ### Analysis
 | Tool | Description |
 |------|-------------|
-| `analyze_image` | AI-powered image descriptions (with optional grounding) |
+| `analyze_image` | AI-powered image descriptions (with optional grounding and `model` override) |
 | `extract_text` | OCR — extract text with confidence levels |
 | `detect_objects` | Detect objects with bounding boxes |
 | `compare_images` | Compare 2-10 images |
+
+Analysis tools and `optimize_prompt` accept a `model` override (default `gemini-3.5-flash-lite`; or `gemini-3.8-flash` for harder OCR or reasoning).
 
 ### Utility
 | Tool | Description |
@@ -136,18 +138,21 @@ Any of these environment variables will work:
 
 ## Model Selection
 
-### Gemini Models
-- **Fast iterations:** `gemini-2.5-flash-image` (default) — cheapest, lowest latency
-- **Panoramic/grounded:** `gemini-3.1-flash-image-preview` — panoramic ratios, web+image grounding, fast 4K
-- **Max text fidelity:** `gemini-3-pro-image-preview` — ~94% text accuracy, complex multi-turn edits
+### Image Models
+- **Default:** `gemini-nano-banana-2.1` — 1K/2K/4K, web+image grounding, thinking levels, panoramic ratios, up to 14 references, $0.0336/img at 1K
+- **Fastest/cheapest:** `gemini-3.1-flash-lite-image` — 1K only, no panoramic, no grounding, $0.0336/img
+- **Previous-gen workhorse:** `gemini-3.1-flash-image` — 0.5K/1K/2K/4K, panoramic, grounding, $0.067/img at 1K
+- **Max text fidelity:** `gemini-3-pro-image` — best text rendering, complex multi-turn edits, $0.134/img at 1K/2K
+- **Deprecated:** `gemini-2.5-flash-image` — shutdown announced, use `gemini-3.1-flash-lite-image`
 
-### Imagen 4 Models
-- **Cost-effective:** `imagen-4.0-generate-001` — $0.04/img, excellent quality
-- **Cheapest:** `imagen-4.0-fast-generate-001` — $0.02/img, fastest
-- **Maximum quality:** `imagen-4.0-ultra-generate-001` — $0.06/img
+Panoramic ratios (1:4, 4:1, 1:8, 8:1) require `gemini-nano-banana-2.1` or `gemini-3.1-flash-image`. `0.5K` is `gemini-3.1-flash-image` only; `gemini-3.1-flash-lite-image` is 1K only.
+
+### Analysis Models
+- **Default:** `gemini-3.5-flash-lite` — $0.30 in / $2.50 out per 1M tokens
+- **Strongest:** `gemini-3.8-flash` — $0.75 in / $3.75 out per 1M tokens
 
 ### Quality Presets
-Use `quality="fast"`, `"balanced"`, or `"quality"` instead of choosing a model manually.
+Use `quality="fast"` (`gemini-3.1-flash-lite-image`), `"balanced"` (`gemini-nano-banana-2.1`, 1K), or `"quality"` (`gemini-3-pro-image`, 2K) instead of choosing a model manually.
 
 Call `list_available_models()` for detailed guidance.
 
@@ -188,7 +193,7 @@ export PATH="$HOME/.local/bin:$PATH"
 src/pixelforge_mcp/
 ├── __init__.py          # Package init
 ├── config.py            # Pydantic config, YAML loading, VERSION, VertexConfig
-├── server.py            # FastMCP server — 21 async tool definitions + helpers
+├── server.py            # FastMCP server — 19 async tool definitions + helpers
 ├── templates/
 │   ├── __init__.py      # Templates package
 │   └── prompts.yaml     # 24 curated prompt templates

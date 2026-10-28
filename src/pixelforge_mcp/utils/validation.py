@@ -24,8 +24,9 @@ ASPECT_RATIOS = [
     "8:1",
 ]
 
-# Supported image sizes (maps to google-genai ImageConfig.image_size)
-IMAGE_SIZES = ["1K", "2K", "4K"]
+# Supported image sizes (maps to google-genai ImageConfig.image_size).
+# Per-model support varies; the Gemini API validates the combination.
+IMAGE_SIZES = ["0.5K", "1K", "2K", "4K"]
 
 # Supported output formats
 OUTPUT_FORMATS = ["png", "jpeg", "webp"]
@@ -37,16 +38,9 @@ FORMAT_EXTENSIONS = {
     "webp": ".webp",
 }
 
-# Person generation controls whether the AI generates people at all.
-# "adults_only" is a child safety feature — it blocks generating minors.
+# Person generation values are accepted for compatibility but are not
+# enforced by the Gemini API, which applies its own built-in restrictions.
 PERSON_GENERATION_OPTIONS = ["allow", "adults_only", "block"]
-
-# Maps user-friendly values to google-genai SDK values
-PERSON_GENERATION_SDK_MAP = {
-    "allow": "ALLOW_ALL",
-    "adults_only": "ALLOW_ADULT",
-    "block": "DONT_ALLOW",
-}
 
 # Prompt optimization style presets
 PROMPT_STYLES = [
@@ -66,31 +60,67 @@ PROMPT_STYLES = [
     "abstract",
 ]
 
-# Cost per operation per model (USD)
+# Stable Gemini image models (all served via generate_content)
+IMAGE_MODELS: List[str] = [
+    "gemini-nano-banana-2.1",
+    "gemini-3.1-flash-lite-image",
+    "gemini-3.1-flash-image",
+    "gemini-3-pro-image",
+    "gemini-2.5-flash-image",  # deprecated legacy
+]
+
+# Text models used by the analysis tools
+ANALYSIS_MODELS: List[str] = [
+    "gemini-3.5-flash-lite",
+    "gemini-3.8-flash",
+]
+
+DEFAULT_MODEL = "gemini-nano-banana-2.1"
+DEFAULT_ANALYSIS_MODEL = "gemini-3.5-flash-lite"
+
+# Preview IDs Google shut down on 2026-06-25, mapped to the stable
+# replacements named on the Gemini API deprecations page.
+DEPRECATED_MODEL_ALIASES: Dict[str, str] = {
+    "gemini-3-pro-image-preview": "gemini-3-pro-image",
+    "gemini-3.1-flash-image-preview": "gemini-nano-banana-2.1",
+}
+
+# Imagen 4 models Google shut down on 2026-08-17 (the API returns 404).
+RETIRED_MODELS: Dict[str, str] = {
+    "imagen-4.0-generate-001": "gemini-nano-banana-2.1",
+    "imagen-4.0-fast-generate-001": "gemini-nano-banana-2.1",
+    "imagen-4.0-ultra-generate-001": "gemini-nano-banana-2.1",
+}
+
+# Cost per operation per model (USD).
+# Image models: price per image at 1K for generate/edit.
+# Analysis models: per-call estimate for a single image plus a short prompt.
 COST_TABLE = {
+    "gemini-nano-banana-2.1": {
+        "generate": 0.0336,
+        "edit": 0.0336,
+    },
+    "gemini-3.1-flash-lite-image": {
+        "generate": 0.0336,
+        "edit": 0.0336,
+    },
+    "gemini-3.1-flash-image": {
+        "generate": 0.067,
+        "edit": 0.067,
+    },
+    "gemini-3-pro-image": {
+        "generate": 0.134,
+        "edit": 0.134,
+    },
     "gemini-2.5-flash-image": {
-        "generate": 0.04,
-        "edit": 0.04,
-        "analyze": 0.01,
+        "generate": 0.039,
+        "edit": 0.039,
     },
-    "gemini-3-pro-image-preview": {
-        "generate": 0.08,
-        "edit": 0.08,
-        "analyze": 0.02,
+    "gemini-3.5-flash-lite": {
+        "analyze": 0.001,
     },
-    "gemini-3.1-flash-image-preview": {
-        "generate": 0.04,
-        "edit": 0.04,
-        "analyze": 0.01,
-    },
-    "imagen-4.0-generate-001": {
-        "generate": 0.04,
-    },
-    "imagen-4.0-ultra-generate-001": {
-        "generate": 0.06,
-    },
-    "imagen-4.0-fast-generate-001": {
-        "generate": 0.02,
+    "gemini-3.8-flash": {
+        "analyze": 0.004,
     },
 }
 
@@ -105,15 +135,15 @@ class QualityPreset(TypedDict):
 # Quality presets map to model + image_size combinations
 QUALITY_PRESETS: Dict[str, QualityPreset] = {
     "fast": {
-        "model": "gemini-2.5-flash-image",
+        "model": "gemini-3.1-flash-lite-image",
         "image_size": None,
     },
     "balanced": {
-        "model": "gemini-3.1-flash-image-preview",
+        "model": "gemini-nano-banana-2.1",
         "image_size": "1K",
     },
     "quality": {
-        "model": "gemini-3-pro-image-preview",
+        "model": "gemini-3-pro-image",
         "image_size": "2K",
     },
 }
@@ -199,7 +229,7 @@ class GenerateImageInput(BaseModel):
         le=2.0,
     )
     model: Optional[str] = Field(
-        None, description="Model to use (default: gemini-2.5-flash-image)"
+        None, description=f"Model to use (default: {DEFAULT_MODEL})"
     )
     quality: Optional[str] = Field(
         None,
@@ -213,8 +243,9 @@ class GenerateImageInput(BaseModel):
     )
     image_size: Optional[str] = Field(
         None,
-        description="Output resolution: 1K (default), 2K, or 4K. "
-        "4K requires gemini-3.1-flash or gemini-3-pro models.",
+        description="Output resolution: 0.5K (gemini-3.1-flash-image only), "
+        "1K (default), 2K, or 4K. 2K/4K are not supported by "
+        "gemini-3.1-flash-lite-image.",
     )
     number_of_images: int = Field(
         1,
@@ -228,17 +259,15 @@ class GenerateImageInput(BaseModel):
     )
     person_generation: Optional[str] = Field(
         None,
-        description="Controls whether people appear in generated images. "
-        '"allow" = anyone, "adults_only" = no minors (child safety), '
-        '"block" = no people at all. '
-        "Only enforced with Imagen models (imagen-4.0-*). "
-        "Gemini has built-in person restrictions but no API-level control.",
+        description="Accepted for compatibility. Not enforced by the "
+        "Gemini API; Gemini applies its own built-in restrictions on "
+        "identifiable people.",
     )
     reference_images: Optional[List[str]] = Field(
         None,
         description="Paths to reference images for style/character "
-        "consistency. Up to 14 images. Gemini 3.1 Flash supports "
-        "10 object + 4 character references.",
+        "consistency. Up to 14 images on gemini-nano-banana-2.1 and "
+        "gemini-3.1-flash-image; 6 on gemini-3-pro-image.",
     )
     thinking_budget: Optional[int] = Field(
         None,
@@ -344,7 +373,8 @@ class EditImageInput(BaseModel):
     model: Optional[str] = Field(
         None,
         description="Model to use for editing. "
-        "gemini-3-pro-image-preview is best for complex multi-turn edits.",
+        "gemini-nano-banana-2.1 (default) or gemini-3-pro-image "
+        "for complex multi-turn edits.",
     )
     output_format: str = Field(
         "png",
@@ -385,6 +415,12 @@ class AnalyzeImageInput(BaseModel):
         None,
         description="Custom analysis prompt (default: general description)",
     )
+    model: Optional[str] = Field(
+        None,
+        description="Analysis model override. "
+        f"Default {DEFAULT_ANALYSIS_MODEL}. "
+        "Use gemini-3.8-flash for harder OCR or reasoning.",
+    )
     use_grounding: bool = Field(
         False,
         description="Enable Google Search grounding for more accurate, "
@@ -406,6 +442,12 @@ class ExtractTextInput(BaseModel):
     """Input validation for OCR / text extraction."""
 
     image_path: str = Field(..., description="Path to the image to extract text from")
+    model: Optional[str] = Field(
+        None,
+        description="Analysis model override. "
+        f"Default {DEFAULT_ANALYSIS_MODEL}. "
+        "Use gemini-3.8-flash for harder OCR or reasoning.",
+    )
     use_grounding: bool = Field(
         False,
         description="Enable Google Search grounding for more accurate, "
@@ -426,6 +468,12 @@ class DetectObjectsInput(BaseModel):
         None,
         description="Specific objects to detect (e.g. 'cats and dogs'). "
         "If not provided, detects all visible objects.",
+    )
+    model: Optional[str] = Field(
+        None,
+        description="Analysis model override. "
+        f"Default {DEFAULT_ANALYSIS_MODEL}. "
+        "Use gemini-3.8-flash for harder OCR or reasoning.",
     )
     use_grounding: bool = Field(
         False,
@@ -449,6 +497,12 @@ class CompareImagesInput(BaseModel):
         None,
         description="Comparison focus (e.g. 'color differences', "
         "'layout changes'). Default: general comparison.",
+    )
+    model: Optional[str] = Field(
+        None,
+        description="Analysis model override. "
+        f"Default {DEFAULT_ANALYSIS_MODEL}. "
+        "Use gemini-3.8-flash for harder OCR or reasoning.",
     )
     use_grounding: bool = Field(
         False,
@@ -592,6 +646,12 @@ class OptimizePromptInput(BaseModel):
         "anime, cinematic, product_photo, architecture, food, "
         "fashion, abstract",
     )
+    model: Optional[str] = Field(
+        None,
+        description="Analysis model override. "
+        f"Default {DEFAULT_ANALYSIS_MODEL}. "
+        "Use gemini-3.8-flash for harder OCR or reasoning.",
+    )
 
     @field_validator("prompt")
     @classmethod
@@ -620,7 +680,7 @@ class EstimateCostInput(BaseModel):
     )
     model: Optional[str] = Field(
         None,
-        description="Model to estimate cost for. " "Default: gemini-2.5-flash-image",
+        description=f"Model to estimate cost for. Default: {DEFAULT_MODEL}",
     )
     number_of_images: int = Field(1, description="Number of images", ge=1, le=100)
 

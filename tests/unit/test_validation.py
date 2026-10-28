@@ -6,15 +6,20 @@ import pytest
 from pydantic import ValidationError
 
 from pixelforge_mcp.utils.validation import (
+    ANALYSIS_MODELS,
     ASPECT_RATIOS,
     COST_TABLE,
+    DEFAULT_ANALYSIS_MODEL,
+    DEFAULT_MODEL,
+    DEPRECATED_MODEL_ALIASES,
     FORMAT_EXTENSIONS,
+    IMAGE_MODELS,
     IMAGE_SIZES,
     OUTPUT_FORMATS,
     PERSON_GENERATION_OPTIONS,
-    PERSON_GENERATION_SDK_MAP,
     PROMPT_STYLES,
     QUALITY_PRESETS,
+    RETIRED_MODELS,
     AnalyzeImageInput,
     CompareImagesInput,
     DetectObjectsInput,
@@ -169,6 +174,12 @@ class TestGenerateImageSize:
         input_data = GenerateImageInput(prompt="test", image_size="2k")
         assert input_data.image_size == "2K"
 
+    def test_half_k_size_accepted(self):
+        """Test 0.5K (gemini-3.1-flash-image only) is accepted and normalized."""
+        assert "0.5K" in IMAGE_SIZES
+        input_data = GenerateImageInput(prompt="test", image_size="0.5k")
+        assert input_data.image_size == "0.5K"
+
     def test_invalid_image_size_rejected(self):
         """Test invalid image sizes are rejected."""
         with pytest.raises(ValidationError, match="Invalid image size"):
@@ -273,11 +284,6 @@ class TestGeneratePersonGeneration:
         with pytest.raises(ValidationError, match="Invalid person generation"):
             GenerateImageInput(prompt="test", person_generation="block_all")
 
-    def test_sdk_map_covers_all_options(self):
-        """Test SDK map has entries for all user-facing options."""
-        for option in PERSON_GENERATION_OPTIONS:
-            assert option in PERSON_GENERATION_SDK_MAP
-
 
 class TestGenerateAllNewParams:
     """Tests for using all new params together."""
@@ -310,6 +316,29 @@ class TestQualityPresets:
         for preset in QUALITY_PRESETS:
             data = GenerateImageInput(prompt="test", quality=preset)
             assert data.quality == preset
+
+    def test_quality_presets_resolve_to_stable_models(self):
+        """Test presets map to the stable models and sizes."""
+        assert QUALITY_PRESETS["fast"] == {
+            "model": "gemini-3.1-flash-lite-image",
+            "image_size": None,
+        }
+        assert QUALITY_PRESETS["balanced"] == {
+            "model": "gemini-nano-banana-2.1",
+            "image_size": "1K",
+        }
+        assert QUALITY_PRESETS["quality"] == {
+            "model": "gemini-3-pro-image",
+            "image_size": "2K",
+        }
+
+    def test_quality_presets_use_supported_models(self):
+        """Test every preset points at a listed image model."""
+        for name, preset in QUALITY_PRESETS.items():
+            assert preset["model"] in IMAGE_MODELS, name
+            assert preset["model"] in COST_TABLE, name
+            size = preset["image_size"]
+            assert size is None or size in IMAGE_SIZES, name
 
     def test_quality_preset_case_insensitive(self):
         """Test quality is case insensitive."""
@@ -417,9 +446,9 @@ class TestEditImageInput:
         input_data = EditImageInput(
             prompt="add clouds",
             input_image_path=str(image_path),
-            model="gemini-3-pro-image-preview",
+            model="gemini-3-pro-image",
         )
-        assert input_data.model == "gemini-3-pro-image-preview"
+        assert input_data.model == "gemini-3-pro-image"
 
     def test_model_default_is_none(self, tmp_path):
         """Test model default is None."""
@@ -657,25 +686,6 @@ class TestConstants:
         for size in IMAGE_SIZES:
             assert size == size.upper()
 
-    def test_person_generation_sdk_map_values(self):
-        """Test SDK map values match PersonGeneration enum members."""
-        from google.genai.types import PersonGeneration
-
-        valid_members = {
-            PersonGeneration.ALLOW_ALL,
-            PersonGeneration.ALLOW_ADULT,
-            PersonGeneration.DONT_ALLOW,
-        }
-        for sdk_val in PERSON_GENERATION_SDK_MAP.values():
-            assert sdk_val == sdk_val.upper()
-            assert (
-                sdk_val in valid_members
-            ), f"{sdk_val} is not a valid PersonGeneration member"
-
-    def test_person_generation_block_maps_to_dont_allow(self):
-        """Test 'block' maps to DONT_ALLOW (not ALLOW_NONE)."""
-        assert PERSON_GENERATION_SDK_MAP["block"] == "DONT_ALLOW"
-
     def test_prompt_styles_defined(self):
         """Test prompt styles list is populated."""
         assert len(PROMPT_STYLES) > 0
@@ -683,30 +693,68 @@ class TestConstants:
         assert "cinematic" in PROMPT_STYLES
 
     def test_cost_table_has_all_models(self):
-        """Test cost table covers all known models."""
-        assert "gemini-2.5-flash-image" in COST_TABLE
-        assert "gemini-3-pro-image-preview" in COST_TABLE
-        assert "gemini-3.1-flash-image-preview" in COST_TABLE
+        """Test cost table covers every image and analysis model."""
+        for model_name in IMAGE_MODELS + ANALYSIS_MODELS:
+            assert model_name in COST_TABLE, f"{model_name} missing from COST_TABLE"
+        assert set(COST_TABLE) == set(IMAGE_MODELS) | set(ANALYSIS_MODELS)
 
-    def test_cost_table_has_generate(self):
-        """Test all models have at least a generate cost."""
-        for model_name, costs in COST_TABLE.items():
-            assert "generate" in costs, f"{model_name} missing generate"
-
-    def test_gemini_models_have_all_operations(self):
-        """Test Gemini models have generate, edit, and analyze costs."""
-        gemini_models = [m for m in COST_TABLE if m.startswith("gemini-")]
-        for model_name in gemini_models:
+    def test_image_models_have_generate_and_edit(self):
+        """Test image models price generate and edit, but not analyze."""
+        for model_name in IMAGE_MODELS:
             costs = COST_TABLE[model_name]
+            assert "generate" in costs, f"{model_name} missing generate"
             assert "edit" in costs, f"{model_name} missing edit"
-            assert "analyze" in costs, f"{model_name} missing analyze"
+            assert "analyze" not in costs, f"{model_name} should not price analyze"
 
-    def test_imagen4_models_generate_only(self):
-        """Test Imagen 4 models only have generate cost."""
-        imagen_models = [m for m in COST_TABLE if m.startswith("imagen-")]
-        assert len(imagen_models) >= 2
-        for model_name in imagen_models:
-            assert "generate" in COST_TABLE[model_name]
+    def test_analysis_models_only_have_analyze(self):
+        """Test analysis models price analyze only."""
+        for model_name in ANALYSIS_MODELS:
+            assert set(COST_TABLE[model_name]) == {"analyze"}, model_name
+
+    def test_cost_table_prices(self):
+        """Test cost table holds the stable-model 1K prices."""
+        assert COST_TABLE["gemini-nano-banana-2.1"]["generate"] == 0.0336
+        assert COST_TABLE["gemini-3.1-flash-lite-image"]["generate"] == 0.0336
+        assert COST_TABLE["gemini-3.1-flash-image"]["generate"] == 0.067
+        assert COST_TABLE["gemini-3-pro-image"]["generate"] == 0.134
+        assert COST_TABLE["gemini-2.5-flash-image"]["generate"] == 0.039
+        assert COST_TABLE["gemini-3.5-flash-lite"]["analyze"] == 0.001
+        assert COST_TABLE["gemini-3.8-flash"]["analyze"] == 0.004
+
+    def test_default_models(self):
+        """Test default image and analysis models are listed."""
+        assert DEFAULT_MODEL == "gemini-nano-banana-2.1"
+        assert DEFAULT_MODEL in IMAGE_MODELS
+        assert DEFAULT_ANALYSIS_MODEL == "gemini-3.5-flash-lite"
+        assert DEFAULT_ANALYSIS_MODEL in ANALYSIS_MODELS
+
+    def test_retired_and_aliased_models_not_listed(self):
+        """Test retired and aliased IDs are not offered as models."""
+        for model_name in list(RETIRED_MODELS) + list(DEPRECATED_MODEL_ALIASES):
+            assert model_name not in IMAGE_MODELS
+            assert model_name not in COST_TABLE
+
+    def test_replacements_are_listed_image_models(self):
+        """Test every alias and retirement points at a listed image model."""
+        for replacement in DEPRECATED_MODEL_ALIASES.values():
+            assert replacement in IMAGE_MODELS
+        for replacement in RETIRED_MODELS.values():
+            assert replacement in IMAGE_MODELS
+
+    def test_deprecated_aliases(self):
+        """Test preview IDs map to the replacements Google names."""
+        assert DEPRECATED_MODEL_ALIASES == {
+            "gemini-3-pro-image-preview": "gemini-3-pro-image",
+            "gemini-3.1-flash-image-preview": "gemini-nano-banana-2.1",
+        }
+
+    def test_retired_models_are_imagen_4(self):
+        """Test all three Imagen 4 IDs are retired."""
+        assert set(RETIRED_MODELS) == {
+            "imagen-4.0-generate-001",
+            "imagen-4.0-fast-generate-001",
+            "imagen-4.0-ultra-generate-001",
+        }
 
 
 # ------------------------------------------------------------------
@@ -944,3 +992,55 @@ class TestEstimateCostInput:
         data = EstimateCostInput(operation="generate")
         assert data.model is None
         assert data.number_of_images == 1
+
+
+class TestAnalysisModelOverride:
+    """Tests for the model override on analysis inputs."""
+
+    @staticmethod
+    def _build(input_cls, tmp_path, **extra):
+        img = tmp_path / "img.png"
+        img.touch()
+        if input_cls is OptimizePromptInput:
+            return input_cls(prompt="a cat", **extra)
+        if input_cls is CompareImagesInput:
+            img2 = tmp_path / "img2.png"
+            img2.touch()
+            return input_cls(image_paths=[str(img), str(img2)], **extra)
+        return input_cls(image_path=str(img), **extra)
+
+    @pytest.mark.parametrize(
+        "input_cls",
+        [
+            AnalyzeImageInput,
+            ExtractTextInput,
+            DetectObjectsInput,
+            CompareImagesInput,
+            OptimizePromptInput,
+        ],
+    )
+    def test_model_defaults_to_none(self, input_cls, tmp_path):
+        """Test the analysis model override is optional."""
+        data = self._build(input_cls, tmp_path)
+        assert data.model is None
+
+    @pytest.mark.parametrize(
+        "input_cls",
+        [
+            AnalyzeImageInput,
+            ExtractTextInput,
+            DetectObjectsInput,
+            CompareImagesInput,
+            OptimizePromptInput,
+        ],
+    )
+    @pytest.mark.parametrize("model_name", ANALYSIS_MODELS)
+    def test_model_override_accepted(self, input_cls, model_name, tmp_path):
+        """Test every analysis model is accepted as an override."""
+        data = self._build(input_cls, tmp_path, model=model_name)
+        assert data.model == model_name
+
+    def test_model_field_documents_default(self):
+        """Test the field description names the default analysis model."""
+        description = AnalyzeImageInput.model_fields["model"].description
+        assert DEFAULT_ANALYSIS_MODEL in description

@@ -1,4 +1,4 @@
-"""Main MCP server implementation for Gemini Imagen."""
+"""Main MCP server implementation for PixelForge."""
 
 import asyncio
 import logging
@@ -143,21 +143,27 @@ async def generate_image(
         aspect_ratio: Image dimensions (1:1, 16:9, 9:16, etc.)
         temperature: Creativity level 0.0-2.0
         model: Model override. Options:
-            - "gemini-2.5-flash-image" (default): Fast, cheap
-            - "gemini-3-pro-image-preview": Best text, complex edits
-            - "gemini-3.1-flash-image-preview": Panoramic, fast 4K
-        quality: Quality preset: "fast" (cheapest), "balanced"
-            (good quality), or "quality" (best output). Mutually
-            exclusive with 'model'.
+            - "gemini-nano-banana-2.1" (default): Best all-round,
+              panoramic, grounding
+            - "gemini-3.1-flash-lite-image": Fastest, cheapest, 1K only
+            - "gemini-3.1-flash-image": Panoramic, grounding, 0.5K tier
+            - "gemini-3-pro-image": Best text rendering, complex edits
+        quality: Quality preset: "fast" (gemini-3.1-flash-lite-image),
+            "balanced" (gemini-nano-banana-2.1), or "quality"
+            (gemini-3-pro-image, 2K). Mutually exclusive with 'model'.
         safety_setting: Safety filter (preset:strict, preset:relaxed)
-        image_size: Resolution: "1K" (default), "2K", or "4K"
+        image_size: Resolution: "0.5K" (gemini-3.1-flash-image only),
+            "1K" (default), "2K", or "4K". 2K/4K are not supported by
+            gemini-3.1-flash-lite-image.
         number_of_images: Generate 1-4 variations (default: 1)
         output_format: File format: "png", "jpeg", or "webp"
-        person_generation: People in images: "allow", "adults_only"
-            (no minors), or "block" (no people). Only enforced with
-            Imagen models. Gemini has built-in person restrictions.
+        person_generation: Accepted for compatibility ("allow",
+            "adults_only", "block"). Not enforced by the Gemini API;
+            Gemini applies its own built-in restrictions on
+            identifiable people.
         reference_images: Paths to reference images for style/character
-            consistency (up to 14 images)
+            consistency (up to 14 images on gemini-nano-banana-2.1
+            and gemini-3.1-flash-image; 6 on gemini-3-pro-image)
         thinking_budget: Thinking budget for extended reasoning
             (0-24576 tokens). Higher = deeper reasoning.
 
@@ -174,7 +180,7 @@ async def generate_image(
 
         generate_image(
             prompt="Product photo of a watch",
-            model="gemini-3.1-flash-image-preview",
+            model="gemini-3.1-flash-image",
             image_size="4K",
             output_format="webp"
         )
@@ -326,8 +332,8 @@ async def edit_image(
         input_image_path: Path to the image to edit
         output_filename: Custom filename for edited image (optional)
         temperature: Creativity level 0.0-2.0
-        model: Model override. "gemini-3-pro-image-preview" best
-            for complex multi-turn edits.
+        model: Model override. Default "gemini-nano-banana-2.1";
+            "gemini-3-pro-image" is best for complex multi-turn edits.
         output_format: File format: "png", "jpeg", or "webp"
 
     Returns:
@@ -337,7 +343,7 @@ async def edit_image(
         edit_image(
             prompt="Add a rainbow in the sky",
             input_image_path="/path/to/image.png",
-            model="gemini-3-pro-image-preview"
+            model="gemini-3-pro-image"
         )
     """
     logger.info(f"Editing image: {input_image_path}")
@@ -790,6 +796,7 @@ async def advanced_edit(
 async def analyze_image(
     image_path: str,
     prompt: Optional[str] = None,
+    model: Optional[str] = None,
     use_grounding: bool = False,
 ) -> Dict[str, Any]:
     """Analyze an image and get a detailed description.
@@ -797,6 +804,8 @@ async def analyze_image(
     Args:
         image_path: Path to the image to analyze
         prompt: Custom analysis prompt. Default: general description.
+        model: Analysis model override. Default gemini-3.5-flash-lite.
+            Use gemini-3.8-flash for harder OCR or reasoning.
         use_grounding: Enable Google Search grounding for more
             accurate, factual analysis results.
 
@@ -815,13 +824,17 @@ async def analyze_image(
 
     try:
         inputs = AnalyzeImageInput(
-            image_path=image_path, prompt=prompt, use_grounding=use_grounding
+            image_path=image_path,
+            prompt=prompt,
+            model=model,
+            use_grounding=use_grounding,
         )
 
         client = get_api_client()
         result = await client.analyze(
             Path(inputs.image_path),
             prompt=inputs.prompt,
+            model=inputs.model,
             use_grounding=inputs.use_grounding,
         )
 
@@ -850,6 +863,7 @@ async def analyze_image(
 @mcp.tool()
 async def extract_text(
     image_path: str,
+    model: Optional[str] = None,
     use_grounding: bool = False,
 ) -> Dict[str, Any]:
     """Extract text from an image using OCR.
@@ -859,6 +873,8 @@ async def extract_text(
 
     Args:
         image_path: Path to the image to extract text from
+        model: Analysis model override. Default gemini-3.5-flash-lite.
+            Use gemini-3.8-flash for harder OCR.
         use_grounding: Enable Google Search grounding for more
             accurate, factual results.
 
@@ -871,11 +887,14 @@ async def extract_text(
     logger.info(f"Extracting text: {image_path}")
 
     try:
-        inputs = ExtractTextInput(image_path=image_path, use_grounding=use_grounding)
+        inputs = ExtractTextInput(
+            image_path=image_path, model=model, use_grounding=use_grounding
+        )
 
         client = get_api_client()
         result = await client.extract_text(
             Path(inputs.image_path),
+            model=inputs.model,
             use_grounding=inputs.use_grounding,
         )
 
@@ -906,6 +925,7 @@ async def extract_text(
 async def detect_objects(
     image_path: str,
     objects: Optional[str] = None,
+    model: Optional[str] = None,
     use_grounding: bool = False,
 ) -> Dict[str, Any]:
     """Detect objects in an image with bounding boxes.
@@ -918,6 +938,8 @@ async def detect_objects(
         image_path: Path to the image
         objects: Specific objects to detect (e.g. "cats and dogs").
             Default: detect all visible objects.
+        model: Analysis model override. Default gemini-3.5-flash-lite.
+            Use gemini-3.8-flash for harder OCR or reasoning.
         use_grounding: Enable Google Search grounding for more
             accurate, factual results.
 
@@ -936,13 +958,17 @@ async def detect_objects(
 
     try:
         inputs = DetectObjectsInput(
-            image_path=image_path, objects=objects, use_grounding=use_grounding
+            image_path=image_path,
+            objects=objects,
+            model=model,
+            use_grounding=use_grounding,
         )
 
         client = get_api_client()
         result = await client.detect_objects(
             Path(inputs.image_path),
             objects=inputs.objects,
+            model=inputs.model,
             use_grounding=inputs.use_grounding,
         )
 
@@ -973,6 +999,7 @@ async def detect_objects(
 async def compare_images(
     image_paths: List[str],
     prompt: Optional[str] = None,
+    model: Optional[str] = None,
     use_grounding: bool = False,
 ) -> Dict[str, Any]:
     """Compare two or more images and analyze differences.
@@ -984,6 +1011,8 @@ async def compare_images(
         image_paths: Paths to 2+ images to compare
         prompt: Comparison focus (e.g. "color differences").
             Default: general comparison.
+        model: Analysis model override. Default gemini-3.5-flash-lite.
+            Use gemini-3.8-flash for harder OCR or reasoning.
         use_grounding: Enable Google Search grounding for more
             accurate, factual results.
 
@@ -1004,13 +1033,17 @@ async def compare_images(
 
     try:
         inputs = CompareImagesInput(
-            image_paths=image_paths, prompt=prompt, use_grounding=use_grounding
+            image_paths=image_paths,
+            prompt=prompt,
+            model=model,
+            use_grounding=use_grounding,
         )
 
         client = get_api_client()
         result = await client.compare_images(
             [Path(p) for p in inputs.image_paths],
             prompt=inputs.prompt,
+            model=inputs.model,
             use_grounding=inputs.use_grounding,
         )
 
@@ -1049,7 +1082,9 @@ async def compare_images(
 
 
 @mcp.tool()
-async def optimize_prompt(prompt: str, style: Optional[str] = None) -> Dict[str, Any]:
+async def optimize_prompt(
+    prompt: str, style: Optional[str] = None, model: Optional[str] = None
+) -> Dict[str, Any]:
     """Enhance a basic prompt for dramatically better image results.
 
     Uses AI to add details about lighting, composition, colors,
@@ -1062,6 +1097,8 @@ async def optimize_prompt(prompt: str, style: Optional[str] = None) -> Dict[str,
             3d_render, pixel_art, watercolor, oil_painting, sketch,
             anime, cinematic, product_photo, architecture, food,
             fashion, abstract
+        model: Text model override. Default gemini-3.5-flash-lite.
+            Use gemini-3.8-flash for harder OCR or reasoning.
 
     Returns:
         Dictionary with original and enhanced prompts
@@ -1077,10 +1114,12 @@ async def optimize_prompt(prompt: str, style: Optional[str] = None) -> Dict[str,
     logger.info(f"Optimizing prompt: {prompt[:50]}...")
 
     try:
-        inputs = OptimizePromptInput(prompt=prompt, style=style)
+        inputs = OptimizePromptInput(prompt=prompt, style=style, model=model)
 
         client = get_api_client()
-        result = await client.optimize_prompt(prompt=inputs.prompt, style=inputs.style)
+        result = await client.optimize_prompt(
+            prompt=inputs.prompt, style=inputs.style, model=inputs.model
+        )
 
         if result.success and result.data:
             return {
@@ -1211,7 +1250,9 @@ async def estimate_cost(
 
     Args:
         operation: "generate", "edit", or "analyze"
-        model: Model to estimate for (default: all models)
+        model: Model to estimate for (default: all models that
+            support the operation). Image models price generate/edit
+            per image at 1K; text models price analyze per call.
         number_of_images: Number of images (default: 1)
 
     Returns:
@@ -1221,7 +1262,7 @@ async def estimate_cost(
         estimate_cost(operation="generate")
         estimate_cost(
             operation="generate",
-            model="gemini-3-pro-image-preview",
+            model="gemini-3-pro-image",
             number_of_images=10
         )
     """
@@ -1240,7 +1281,15 @@ async def estimate_cost(
                     "success": False,
                     "message": f"Unknown model: {inputs.model}",
                 }
-            unit_cost = costs.get(inputs.operation, 0)
+            if inputs.operation not in costs:
+                return {
+                    "success": False,
+                    "message": (
+                        f"Model {inputs.model} does not support "
+                        f"operation '{inputs.operation}'"
+                    ),
+                }
+            unit_cost = costs[inputs.operation]
             total = unit_cost * inputs.number_of_images
             return {
                 "success": True,
@@ -1254,7 +1303,9 @@ async def estimate_cost(
             # All models comparison
             estimates = []
             for model_name, costs in COST_TABLE.items():
-                unit_cost = costs.get(inputs.operation, 0)
+                if inputs.operation not in costs:
+                    continue
+                unit_cost = costs[inputs.operation]
                 total = unit_cost * inputs.number_of_images
                 estimates.append(
                     {
@@ -1468,6 +1519,7 @@ async def list_available_models() -> Dict[str, Any]:
             return {
                 "success": True,
                 "models": result.data.get("models", []),
+                "analysis_models": result.data.get("analysis_models", []),
                 "recommendation": result.data.get("recommendation", ""),
                 "note": (
                     "Each model can be selected per-request "
@@ -1480,17 +1532,22 @@ async def list_available_models() -> Dict[str, Any]:
                 "success": True,
                 "models": [
                     {
-                        "name": "gemini-2.5-flash-image",
-                        "description": "Fast model for iterations",
+                        "name": "gemini-nano-banana-2.1",
+                        "description": "Best all-round, panoramic, grounded",
                         "default": True,
                     },
                     {
-                        "name": "gemini-3.1-flash-image-preview",
-                        "description": "Panoramic, grounded, 4K",
+                        "name": "gemini-3.1-flash-lite-image",
+                        "description": "Fastest and cheapest, 1K only",
                         "default": False,
                     },
                     {
-                        "name": "gemini-3-pro-image-preview",
+                        "name": "gemini-3.1-flash-image",
+                        "description": "Panoramic, grounded, 0.5K-4K",
+                        "default": False,
+                    },
+                    {
+                        "name": "gemini-3-pro-image",
                         "description": "Max text fidelity",
                         "default": False,
                     },
@@ -1565,10 +1622,11 @@ def get_server_info() -> Dict[str, Any]:
             "setup": "Set GOOGLE_CLOUD_PROJECT and install pixelforge-mcp[vertex]",
         },
         "features": {
-            "resolution_control": "1K/2K/4K via image_size",
+            "resolution_control": "0.5K/1K/2K/4K via image_size",
             "multi_image": "1-4 variations via number_of_images",
             "output_formats": "png, jpeg, webp",
-            "person_generation": "allow, adults_only, block (Imagen models only)",
+            "person_generation": "Accepted for compatibility, not enforced "
+            "by the Gemini API",
             "reference_images": "Up to 14 style/character refs",
             "prompt_optimization": "AI-enhanced prompts",
             "ocr": "Text extraction from images",
