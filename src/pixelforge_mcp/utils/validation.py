@@ -2,7 +2,7 @@
 
 import re
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, TypedDict
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -94,8 +94,16 @@ COST_TABLE = {
     },
 }
 
+
+class QualityPreset(TypedDict):
+    """Model and image size pair behind a quality preset name."""
+
+    model: str
+    image_size: Optional[str]
+
+
 # Quality presets map to model + image_size combinations
-QUALITY_PRESETS = {
+QUALITY_PRESETS: Dict[str, QualityPreset] = {
     "fast": {
         "model": "gemini-2.5-flash-image",
         "image_size": None,
@@ -314,7 +322,7 @@ class GenerateImageInput(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def check_quality_model_exclusive(self):
+    def check_quality_model_exclusive(self) -> "GenerateImageInput":
         if self.quality and self.model:
             raise ValueError(
                 "'quality' and 'model' are mutually " "exclusive. Use one or the other."

@@ -9,7 +9,7 @@ import yaml
 class TemplateLibrary:
     """Manages curated prompt templates."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._templates: List[Dict[str, Any]] = []
         self._loaded = False
 
