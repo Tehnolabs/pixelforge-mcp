@@ -16,6 +16,11 @@ from pixelforge_mcp.utils.api_client import (
     GenerationResult,
     ImagenAPIClient,
 )
+from pixelforge_mcp.utils.validation import (
+    DEPRECATED_MODEL_ALIASES,
+    IMAGE_MODELS,
+    RETIRED_MODELS,
+)
 
 
 class TestGenerationResult:
@@ -52,18 +57,18 @@ class TestImagenAPIClient:
     def test_init_with_defaults(self):
         """Test initialization with default parameters."""
         client = ImagenAPIClient()
-        assert client.model_name == "gemini-2.5-flash-image"
+        assert client.model_name == "gemini-nano-banana-2.1"
         assert client.api_key is None
         assert client.log_images is False
 
     def test_init_with_custom_params(self):
         """Test initialization with custom parameters."""
         client = ImagenAPIClient(
-            model_name="gemini-3-pro-image-preview",
+            model_name="gemini-3-pro-image",
             api_key="test-key",
             log_images=True,
         )
-        assert client.model_name == "gemini-3-pro-image-preview"
+        assert client.model_name == "gemini-3-pro-image"
         assert client.api_key == "test-key"
         assert client.log_images is True
 
@@ -304,14 +309,19 @@ class TestImagenAPIClient:
 
         models = result.data["models"]
         assert isinstance(models, list)
-        assert len(models) == 6
+        assert len(models) == 5
 
         model_names = [m["name"] for m in models]
-        assert "gemini-2.5-flash-image" in model_names
-        assert "gemini-3-pro-image-preview" in model_names
-        assert "gemini-3.1-flash-image-preview" in model_names
-        assert "imagen-4.0-generate-001" in model_names
-        assert "imagen-4.0-fast-generate-001" in model_names
+        assert model_names == [
+            "gemini-nano-banana-2.1",
+            "gemini-3.1-flash-lite-image",
+            "gemini-3.1-flash-image",
+            "gemini-3-pro-image",
+            "gemini-2.5-flash-image",
+        ]
+        assert model_names == IMAGE_MODELS
+        assert not any(name.startswith("imagen-") for name in model_names)
+        assert not any(name.endswith("-preview") for name in model_names)
 
         for model in models:
             assert "name" in model
@@ -322,36 +332,138 @@ class TestImagenAPIClient:
             assert "best_for" in model
             assert "capabilities" in model
             assert "temperature" in model
+            assert "pricing" in model
+            assert "note" not in model
 
     @pytest.mark.asyncio
-    async def test_list_models_nano_banana_2_metadata(self):
-        """Test Nano Banana 2 model metadata is correct."""
+    async def test_list_models_nano_banana_2_1_metadata(self):
+        """Test Nano Banana 2.1 model metadata is correct."""
         client = ImagenAPIClient()
         result = await client.list_models()
 
         models = result.data["models"]
-        nb2 = next(m for m in models if m["name"] == "gemini-3.1-flash-image-preview")
+        nb21 = next(m for m in models if m["name"] == "gemini-nano-banana-2.1")
 
-        assert nb2["nickname"] == "Nano Banana 2"
-        assert nb2["speed"] == "fast"
-        assert nb2["quality"] == "excellent"
-        assert nb2["default"] is False
-        assert nb2["capabilities"]["panoramic_ratios"] is True
-        assert nb2["capabilities"]["text_rendering"] == "excellent"
-        assert nb2["capabilities"]["grounding"] == "web search + Google Image Search"
-        assert nb2["temperature"] == {"min": 0.0, "max": 2.0, "default": 1.0}
+        assert nb21["nickname"] == "Nano Banana 2.1"
+        assert nb21["default"] is True
+        assert nb21["quality"] == "excellent"
+        assert nb21["capabilities"]["panoramic"] is True
+        assert nb21["capabilities"]["reference_images"] == 14
+        assert nb21["capabilities"]["resolution"] == "1K/2K/4K"
+        assert nb21["capabilities"]["person_generation"] is False
+        assert nb21["capabilities"]["grounding"]
+        assert nb21["capabilities"]["thinking"]
+        assert nb21["temperature"] == {"min": 0.0, "max": 2.0, "default": 1.0}
+        assert nb21["pricing"]["1K"] == 0.0336
+        assert nb21["pricing"]["2K"] == 0.0504
+        assert nb21["pricing"]["4K"] == 0.113
+        assert "deprecated" not in nb21
+
+    @pytest.mark.asyncio
+    async def test_list_models_only_default_is_nano_banana_2_1(self):
+        """Test exactly one model is flagged default."""
+        client = ImagenAPIClient()
+        result = await client.list_models()
+
+        defaults = [m["name"] for m in result.data["models"] if m["default"]]
+        assert defaults == ["gemini-nano-banana-2.1"]
+
+    @pytest.mark.asyncio
+    async def test_list_models_flash_lite_is_1k_without_panoramic(self):
+        """Test flash-lite reports 1K only, no panoramic, no grounding."""
+        client = ImagenAPIClient()
+        result = await client.list_models()
+
+        lite = next(
+            m
+            for m in result.data["models"]
+            if m["name"] == "gemini-3.1-flash-lite-image"
+        )
+
+        assert lite["nickname"] == "Nano Banana 2 Lite"
+        assert lite["capabilities"]["panoramic"] is False
+        assert lite["capabilities"]["grounding"] is False
+        assert lite["capabilities"]["resolution"] == "1K"
+        # Google gives no reference-image limit for this model.
+        assert lite["capabilities"]["reference_images"] is None
+        assert lite["pricing"]["1K"] == 0.0336
+        assert lite["pricing"]["2K"] is None
+        assert lite["pricing"]["4K"] is None
+
+    @pytest.mark.asyncio
+    async def test_list_models_flash_image_pricing_and_sizes(self):
+        """Test gemini-3.1-flash-image reports the 0.5K tier and its prices."""
+        client = ImagenAPIClient()
+        result = await client.list_models()
+
+        flash = next(
+            m for m in result.data["models"] if m["name"] == "gemini-3.1-flash-image"
+        )
+
+        assert flash["capabilities"]["panoramic"] is True
+        assert flash["capabilities"]["resolution"] == "0.5K/1K/2K/4K"
+        assert flash["pricing"] == {
+            "0.5K": 0.045,
+            "1K": 0.067,
+            "2K": 0.101,
+            "4K": 0.151,
+        }
+
+    @pytest.mark.asyncio
+    async def test_list_models_pro_metadata(self):
+        """Test Nano Banana Pro metadata."""
+        client = ImagenAPIClient()
+        result = await client.list_models()
+
+        pro = next(
+            m for m in result.data["models"] if m["name"] == "gemini-3-pro-image"
+        )
+
+        assert pro["nickname"] == "Nano Banana Pro"
+        assert pro["capabilities"]["reference_images"] == 6
+        assert pro["capabilities"]["panoramic"] is False
+        assert pro["pricing"]["1K"] == 0.134
+        assert pro["pricing"]["2K"] == 0.134
+        assert pro["pricing"]["4K"] == 0.24
+
+    @pytest.mark.asyncio
+    async def test_list_models_marks_legacy_model_deprecated(self):
+        """Test gemini-2.5-flash-image is deprecated with a replacement."""
+        client = ImagenAPIClient()
+        result = await client.list_models()
+
+        legacy = next(
+            m for m in result.data["models"] if m["name"] == "gemini-2.5-flash-image"
+        )
+
+        assert legacy["deprecated"] is True
+        assert legacy["replacement"] == "gemini-3.1-flash-lite-image"
+        assert legacy["default"] is False
+        assert result.data["models"][-1]["name"] == "gemini-2.5-flash-image"
+
+        others = [m for m in result.data["models"] if m is not legacy]
+        assert all(not m.get("deprecated") for m in others)
+
+    @pytest.mark.asyncio
+    async def test_list_models_recommendation_names_presets(self):
+        """Test the recommendation points at the stable models."""
+        client = ImagenAPIClient()
+        result = await client.list_models()
+
+        recommendation = result.data["recommendation"]
+        assert "gemini-3.1-flash-lite-image" in recommendation
+        assert "gemini-nano-banana-2.1" in recommendation
+        assert "gemini-3-pro-image" in recommendation
+        assert "imagen" not in recommendation.lower()
 
     @pytest.mark.asyncio
     async def test_list_models_person_generation_capability(self):
-        """Test Gemini models report False, Imagen models report True."""
+        """Test no model reports API-level person_generation control."""
         client = ImagenAPIClient()
         result = await client.list_models()
 
         for model in result.data["models"]:
-            if model["name"].startswith("gemini-"):
-                assert model["capabilities"]["person_generation"] is False
-            else:
-                assert model["capabilities"]["person_generation"] is True
+            assert model["capabilities"]["person_generation"] is False
 
     @pytest.mark.asyncio
     async def test_generate_model_override(self, tmp_path):
@@ -376,12 +488,12 @@ class TestImagenAPIClient:
         await client.generate(
             prompt="test",
             output_path=tmp_path / "test.png",
-            model="gemini-3-pro-image-preview",
+            model="gemini-3-pro-image",
         )
 
         # Verify the model was passed to the SDK call
         call_kwargs = mock_client.aio.models.generate_content.call_args[1]
-        assert call_kwargs["model"] == "gemini-3-pro-image-preview"
+        assert call_kwargs["model"] == "gemini-3-pro-image"
 
 
 class TestSafetySettings:
@@ -504,13 +616,13 @@ class TestEditWithModel:
             prompt="add clouds",
             input_path=input_path,
             output_path=output_path,
-            model="gemini-3-pro-image-preview",
+            model="gemini-3-pro-image",
         )
 
         assert result.success is True
         # Verify the model was passed to the SDK call
         call_kwargs = mock_client.aio.models.generate_content.call_args[1]
-        assert call_kwargs["model"] == "gemini-3-pro-image-preview"
+        assert call_kwargs["model"] == "gemini-3-pro-image"
 
     @pytest.mark.asyncio
     async def test_edit_without_model_uses_default(self, tmp_path):
@@ -1170,95 +1282,6 @@ class TestCallTextModelWithImage:
         assert result == ""
 
 
-class TestImagen4:
-    """Tests for Imagen 4 generation via client.models.generate_images."""
-
-    @pytest.mark.asyncio
-    async def test_imagen4_generate_success(self, tmp_path):
-        """Test successful Imagen 4 generation."""
-        test_img = Image.new("RGB", (10, 10), color="green")
-        buf = io.BytesIO()
-        test_img.save(buf, format="PNG")
-
-        mock_generated = Mock()
-        mock_generated.image = Mock(image_bytes=buf.getvalue())
-        mock_response = Mock()
-        mock_response.generated_images = [mock_generated]
-
-        mock_client = Mock()
-        mock_client.models.generate_images = Mock(return_value=mock_response)
-
-        client = ImagenAPIClient(api_key="test-key")
-        client._genai_client = mock_client
-        output_path = tmp_path / "imagen4_out.png"
-
-        result = await client.generate(
-            prompt="a cat sitting on a chair",
-            output_path=output_path,
-            model="imagen-4.0-generate-001",
-        )
-
-        assert result.success is True
-        assert result.images is not None
-        assert len(result.images) == 1
-        assert result.image_paths == [str(output_path)]
-        assert result.data["model"] == "imagen-4.0-generate-001"
-        assert output_path.exists()
-
-    @pytest.mark.asyncio
-    async def test_imagen4_auto_routing(self, tmp_path):
-        """Test that generate() auto-routes Imagen 4 models."""
-        test_img = Image.new("RGB", (10, 10), color="blue")
-        buf = io.BytesIO()
-        test_img.save(buf, format="PNG")
-
-        mock_generated = Mock()
-        mock_generated.image = Mock(image_bytes=buf.getvalue())
-        mock_response = Mock()
-        mock_response.generated_images = [mock_generated]
-
-        mock_client = Mock()
-        mock_client.models.generate_images = Mock(return_value=mock_response)
-        # Also set up aio.models to verify it is NOT called
-        mock_client.aio.models.generate_content = AsyncMock()
-
-        client = ImagenAPIClient(api_key="test-key")
-        client._genai_client = mock_client
-        output_path = tmp_path / "out.png"
-
-        await client.generate(
-            prompt="test",
-            output_path=output_path,
-            model="imagen-4.0-generate-001",
-        )
-
-        # Imagen 4 should use generate_images, NOT generate_content
-        mock_client.models.generate_images.assert_called_once()
-        mock_client.aio.models.generate_content.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_imagen4_failure(self, tmp_path):
-        """Test Imagen 4 failure when no images generated."""
-        mock_response = Mock()
-        mock_response.generated_images = []
-
-        mock_client = Mock()
-        mock_client.models.generate_images = Mock(return_value=mock_response)
-
-        client = ImagenAPIClient(api_key="test-key")
-        client._genai_client = mock_client
-        output_path = tmp_path / "out.png"
-
-        result = await client.generate(
-            prompt="test",
-            output_path=output_path,
-            model="imagen-4.0-generate-001",
-        )
-
-        assert result.success is False
-        assert result.error == "No images generated"
-
-
 class TestPersonGenerationWarnOnly:
     """Tests for person_generation warn-only behavior on Gemini models."""
 
@@ -1323,7 +1346,12 @@ class TestPersonGenerationWarnOnly:
         assert result.success is True
         assert result.data is not None
         assert "warnings" in result.data
-        assert "Imagen" in result.data["warnings"][0]
+        assert len(result.data["warnings"]) == 1
+        warning = result.data["warnings"][0]
+        assert "person_generation='block'" in warning
+        assert "not enforced" in warning
+        assert "Imagen" not in warning
+        assert "imagen" not in warning
         assert result.data["person_generation"] is None
 
 
@@ -1471,6 +1499,234 @@ class TestAdvancedEdit:
         assert result.success is False
         assert result.error == "Unknown edit mode: not_a_mode"
         mock_client.models.edit_image.assert_not_called()
+
+
+class TestModelResolution:
+    """Tests for retired model rejection and deprecated alias rewriting."""
+
+    @staticmethod
+    def _mock_image_client():
+        """Build a mock genai client whose generate_content returns an image."""
+        buf = io.BytesIO()
+        Image.new("RGB", (10, 10), color="red").save(buf, format="PNG")
+
+        mock_part = Mock()
+        mock_part.inline_data = Mock(data=buf.getvalue())
+        mock_candidate = Mock()
+        mock_candidate.content.parts = [mock_part]
+        mock_response = Mock(candidates=[mock_candidate])
+        mock_response.prompt_feedback = None
+
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+        return mock_client
+
+    @staticmethod
+    def _write_input(path):
+        Image.new("RGB", (10, 10), color="blue").save(str(path))
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("retired_model", sorted(RETIRED_MODELS))
+    async def test_generate_rejects_retired_imagen_model(self, tmp_path, retired_model):
+        """Retired Imagen IDs fail fast with a migration error and no SDK call."""
+        mock_client = self._mock_image_client()
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
+        result = await client.generate(
+            prompt="test",
+            output_path=tmp_path / "out.png",
+            model=retired_model,
+        )
+
+        assert result.success is False
+        assert "retired" in result.error
+        assert retired_model in result.error
+        assert "gemini-nano-banana-2.1" in result.error
+        assert "2026-08-17" in result.error
+        assert not (tmp_path / "out.png").exists()
+        mock_client.aio.models.generate_content.assert_not_called()
+        mock_client.models.generate_images.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_generate_rejects_retired_default_model(self, tmp_path):
+        """A retired model set as the client default is rejected too."""
+        mock_client = self._mock_image_client()
+        client = ImagenAPIClient(
+            model_name="imagen-4.0-fast-generate-001", api_key="test-key"
+        )
+        client._genai_client = mock_client
+
+        result = await client.generate(prompt="test", output_path=tmp_path / "o.png")
+
+        assert result.success is False
+        assert "retired" in result.error
+        mock_client.aio.models.generate_content.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_edit_rejects_retired_imagen_model(self, tmp_path):
+        """edit() applies the same retired model rejection."""
+        mock_client = self._mock_image_client()
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+        input_path = tmp_path / "input.png"
+        self._write_input(input_path)
+
+        result = await client.edit(
+            prompt="add clouds",
+            input_path=input_path,
+            output_path=tmp_path / "out.png",
+            model="imagen-4.0-generate-001",
+        )
+
+        assert result.success is False
+        assert "retired" in result.error
+        assert "gemini-nano-banana-2.1" in result.error
+        mock_client.aio.models.generate_content.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "old_id,new_id",
+        sorted(DEPRECATED_MODEL_ALIASES.items()),
+    )
+    async def test_generate_rewrites_preview_alias(self, tmp_path, old_id, new_id):
+        """Shut-down preview IDs call the stable model and add a warning."""
+        mock_client = self._mock_image_client()
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
+        result = await client.generate(
+            prompt="test",
+            output_path=tmp_path / "out.png",
+            model=old_id,
+        )
+
+        assert result.success is True
+        call_kwargs = mock_client.aio.models.generate_content.call_args.kwargs
+        assert call_kwargs["model"] == new_id
+        assert result.data["model"] == new_id
+        assert len(result.data["warnings"]) == 1
+        assert old_id in result.data["warnings"][0]
+        assert new_id in result.data["warnings"][0]
+
+    @pytest.mark.asyncio
+    async def test_generate_alias_and_person_generation_warnings_combine(
+        self, tmp_path
+    ):
+        """Alias and person_generation warnings share one warnings list."""
+        mock_client = self._mock_image_client()
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
+        result = await client.generate(
+            prompt="test",
+            output_path=tmp_path / "out.png",
+            model="gemini-3.1-flash-image-preview",
+            person_generation="allow",
+        )
+
+        assert result.success is True
+        warnings = result.data["warnings"]
+        assert len(warnings) == 2
+        assert "gemini-3.1-flash-image-preview" in warnings[0]
+        assert "person_generation='allow'" in warnings[1]
+        assert "Imagen" not in warnings[1]
+
+    @pytest.mark.asyncio
+    async def test_generate_stable_model_has_no_warnings_key(self, tmp_path):
+        """Stable models without person_generation add no warnings key."""
+        mock_client = self._mock_image_client()
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
+        result = await client.generate(
+            prompt="test",
+            output_path=tmp_path / "out.png",
+            model="gemini-3.1-flash-image",
+        )
+
+        assert result.success is True
+        assert result.data["model"] == "gemini-3.1-flash-image"
+        assert "warnings" not in result.data
+
+    @pytest.mark.asyncio
+    async def test_generate_default_model_is_nano_banana_2_1(self, tmp_path):
+        """With no model set, generate_content gets gemini-nano-banana-2.1."""
+        mock_client = self._mock_image_client()
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
+        result = await client.generate(prompt="test", output_path=tmp_path / "o.png")
+
+        assert result.success is True
+        call_kwargs = mock_client.aio.models.generate_content.call_args.kwargs
+        assert call_kwargs["model"] == "gemini-nano-banana-2.1"
+        assert result.data["model"] == "gemini-nano-banana-2.1"
+
+    @pytest.mark.asyncio
+    async def test_generate_does_not_rewrite_legacy_stable_ids(self, tmp_path):
+        """The deprecated gemini-2.5-flash-image still resolves unchanged."""
+        mock_client = self._mock_image_client()
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
+        result = await client.generate(
+            prompt="test",
+            output_path=tmp_path / "out.png",
+            model="gemini-2.5-flash-image",
+        )
+
+        assert result.success is True
+        call_kwargs = mock_client.aio.models.generate_content.call_args.kwargs
+        assert call_kwargs["model"] == "gemini-2.5-flash-image"
+        assert "warnings" not in result.data
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "old_id,new_id",
+        sorted(DEPRECATED_MODEL_ALIASES.items()),
+    )
+    async def test_edit_rewrites_preview_alias(self, tmp_path, old_id, new_id):
+        """edit() rewrites preview IDs and reports the substitution."""
+        mock_client = self._mock_image_client()
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+        input_path = tmp_path / "input.png"
+        self._write_input(input_path)
+
+        result = await client.edit(
+            prompt="add clouds",
+            input_path=input_path,
+            output_path=tmp_path / "out.png",
+            model=old_id,
+        )
+
+        assert result.success is True
+        call_kwargs = mock_client.aio.models.generate_content.call_args.kwargs
+        assert call_kwargs["model"] == new_id
+        assert result.data["model"] == new_id
+        assert len(result.data["warnings"]) == 1
+        assert old_id in result.data["warnings"][0]
+        assert new_id in result.data["warnings"][0]
+
+    @pytest.mark.asyncio
+    async def test_edit_stable_model_has_no_warnings_key(self, tmp_path):
+        """edit() with a stable model adds no warnings key."""
+        mock_client = self._mock_image_client()
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+        input_path = tmp_path / "input.png"
+        self._write_input(input_path)
+
+        result = await client.edit(
+            prompt="add clouds",
+            input_path=input_path,
+            output_path=tmp_path / "out.png",
+        )
+
+        assert result.success is True
+        assert result.data["model"] == "gemini-nano-banana-2.1"
+        assert "warnings" not in result.data
 
 
 class TestUpscale:

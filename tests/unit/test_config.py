@@ -22,7 +22,7 @@ class TestImagenConfig:
     def test_default_values(self):
         """Test ImagenConfig uses correct defaults."""
         config = ImagenConfig()
-        assert config.default_model == "gemini-2.5-flash-image"
+        assert config.default_model == "gemini-nano-banana-2.1"
         assert config.default_aspect_ratio == "1:1"
         assert config.default_temperature == 0.7
         assert config.safety_setting == "preset:strict"

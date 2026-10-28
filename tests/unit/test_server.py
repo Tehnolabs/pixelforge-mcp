@@ -5,10 +5,12 @@ import os
 os.environ.setdefault("GOOGLE_API_KEY", "test-placeholder-key")
 
 import re
+from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from pixelforge_mcp import server as server_module
 from pixelforge_mcp.server import (
     estimate_cost as _estimate_cost_tool,
 )
@@ -19,8 +21,8 @@ from pixelforge_mcp.server import (
 from pixelforge_mcp.server import (
     generate_image as _generate_image_tool,
 )
-from pixelforge_mcp.utils.api_client import GenerationResult
-from pixelforge_mcp.utils.validation import COST_TABLE
+from pixelforge_mcp.utils.api_client import GenerationResult, ImagenAPIClient
+from pixelforge_mcp.utils.validation import COST_TABLE, IMAGE_MODELS
 
 # In FastMCP 3.x, @mcp.tool() returns the original function directly.
 estimate_cost_fn = _estimate_cost_tool
@@ -311,15 +313,15 @@ class TestEstimateCost:
         """Test cost estimate for a single model generate operation."""
         result = await estimate_cost_fn(
             operation="generate",
-            model="gemini-2.5-flash-image",
+            model="gemini-nano-banana-2.1",
             number_of_images=1,
         )
 
         assert result["success"] is True
-        assert result["model"] == "gemini-2.5-flash-image"
+        assert result["model"] == "gemini-nano-banana-2.1"
         assert result["operation"] == "generate"
         assert (
-            result["unit_cost_usd"] == COST_TABLE["gemini-2.5-flash-image"]["generate"]
+            result["unit_cost_usd"] == COST_TABLE["gemini-nano-banana-2.1"]["generate"]
         )
         assert result["number_of_images"] == 1
         assert result["total_cost_usd"] == result["unit_cost_usd"]
@@ -329,44 +331,27 @@ class TestEstimateCost:
         """Test cost estimate for a single model edit operation."""
         result = await estimate_cost_fn(
             operation="edit",
-            model="gemini-3-pro-image-preview",
+            model="gemini-3-pro-image",
             number_of_images=1,
         )
 
         assert result["success"] is True
-        assert result["model"] == "gemini-3-pro-image-preview"
+        assert result["model"] == "gemini-3-pro-image"
         assert result["operation"] == "edit"
-        assert (
-            result["unit_cost_usd"] == COST_TABLE["gemini-3-pro-image-preview"]["edit"]
-        )
-
-    @pytest.mark.asyncio
-    async def test_single_model_analyze(self):
-        """Test cost estimate for a single model analyze operation."""
-        result = await estimate_cost_fn(
-            operation="analyze",
-            model="gemini-2.5-flash-image",
-            number_of_images=1,
-        )
-
-        assert result["success"] is True
-        assert result["operation"] == "analyze"
-        assert (
-            result["unit_cost_usd"] == COST_TABLE["gemini-2.5-flash-image"]["analyze"]
-        )
+        assert result["unit_cost_usd"] == COST_TABLE["gemini-3-pro-image"]["edit"]
 
     @pytest.mark.asyncio
     async def test_multiple_images(self):
         """Test cost estimate scales correctly with number_of_images."""
         result = await estimate_cost_fn(
             operation="generate",
-            model="gemini-2.5-flash-image",
+            model="gemini-nano-banana-2.1",
             number_of_images=10,
         )
 
         assert result["success"] is True
         assert result["number_of_images"] == 10
-        expected_total = COST_TABLE["gemini-2.5-flash-image"]["generate"] * 10
+        expected_total = COST_TABLE["gemini-nano-banana-2.1"]["generate"] * 10
         assert result["total_cost_usd"] == round(expected_total, 4)
 
     @pytest.mark.asyncio
@@ -385,7 +370,7 @@ class TestEstimateCost:
 
         estimates = result["estimates"]
         model_names = [e["model"] for e in estimates]
-        for model_name in COST_TABLE:
+        for model_name in IMAGE_MODELS:
             assert model_name in model_names
 
         # Each estimate has the expected fields
@@ -436,7 +421,7 @@ class TestEstimateCost:
         """Test that operation is case insensitive."""
         result = await estimate_cost_fn(
             operation="GENERATE",
-            model="gemini-2.5-flash-image",
+            model="gemini-nano-banana-2.1",
             number_of_images=1,
         )
 
@@ -448,12 +433,13 @@ class TestEstimateCost:
         """Test that total cost is rounded to 4 decimal places."""
         result = await estimate_cost_fn(
             operation="generate",
-            model="gemini-2.5-flash-image",
+            model="gemini-nano-banana-2.1",
             number_of_images=3,
         )
 
         assert result["success"] is True
-        # Verify rounding: 0.04 * 3 = 0.12 (already clean, but test the path)
+        # Verify rounding: 0.0336 * 3 = 0.1008 (float noise must be rounded away)
+        assert result["total_cost_usd"] == 0.1008
         total_str = str(result["total_cost_usd"])
         # Should have at most 4 decimal places
         if "." in total_str:
@@ -600,3 +586,202 @@ class TestGenerateImageMultiImage:
 
         assert result["success"] is True
         assert "partial_failure" not in result
+
+
+# ------------------------------------------------------------------
+# Quality presets and warnings through generate_image
+# ------------------------------------------------------------------
+
+
+class TestGenerateImageModelResolution:
+    """Tests for how generate_image resolves models and surfaces warnings."""
+
+    @staticmethod
+    def _client_writing_files(data=None):
+        async def mock_generate(**kwargs):
+            kwargs["output_path"].write_bytes(b"fake image data")
+            return GenerationResult(
+                success=True,
+                output="Done",
+                data=data or {"model": kwargs["model"]},
+            )
+
+        mock_client = Mock()
+        mock_client.generate = AsyncMock(side_effect=mock_generate)
+        return mock_client
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "quality,expected_model,expected_size",
+        [
+            ("fast", "gemini-3.1-flash-lite-image", None),
+            ("balanced", "gemini-nano-banana-2.1", "1K"),
+            ("quality", "gemini-3-pro-image", "2K"),
+        ],
+    )
+    @patch("pixelforge_mcp.utils.history.get_history")
+    @patch("pixelforge_mcp.server.get_api_client")
+    @patch("pixelforge_mcp.server.get_config")
+    async def test_quality_presets_resolve_to_stable_models(
+        self,
+        mock_config,
+        mock_get_client,
+        mock_history,
+        quality,
+        expected_model,
+        expected_size,
+        tmp_path,
+    ):
+        """Each quality preset reaches the client as its model and size."""
+        mock_config.return_value.storage.output_dir = tmp_path
+        mock_client = self._client_writing_files()
+        mock_get_client.return_value = mock_client
+
+        result = await generate_image_fn(prompt="test prompt", quality=quality)
+
+        assert result["success"] is True
+        kwargs = mock_client.generate.call_args.kwargs
+        assert kwargs["model"] == expected_model
+        assert kwargs["image_size"] == expected_size
+
+    @pytest.mark.asyncio
+    @patch("pixelforge_mcp.utils.history.get_history")
+    @patch("pixelforge_mcp.server.get_api_client")
+    @patch("pixelforge_mcp.server.get_config")
+    async def test_explicit_model_passes_through(
+        self, mock_config, mock_get_client, mock_history, tmp_path
+    ):
+        """An explicit model and 4K size reach the client unchanged."""
+        mock_config.return_value.storage.output_dir = tmp_path
+        mock_client = self._client_writing_files()
+        mock_get_client.return_value = mock_client
+
+        result = await generate_image_fn(
+            prompt="test prompt",
+            model="gemini-3.1-flash-image",
+            image_size="4K",
+        )
+
+        assert result["success"] is True
+        kwargs = mock_client.generate.call_args.kwargs
+        assert kwargs["model"] == "gemini-3.1-flash-image"
+        assert kwargs["image_size"] == "4K"
+
+    @pytest.mark.asyncio
+    @patch("pixelforge_mcp.utils.history.get_history")
+    @patch("pixelforge_mcp.server.get_api_client")
+    @patch("pixelforge_mcp.server.get_config")
+    async def test_alias_warning_reaches_response(
+        self, mock_config, mock_get_client, mock_history, tmp_path
+    ):
+        """Warnings from the client are surfaced at the top level."""
+        mock_config.return_value.storage.output_dir = tmp_path
+        mock_client = self._client_writing_files(
+            data={
+                "model": "gemini-nano-banana-2.1",
+                "warnings": ["Model 'gemini-3.1-flash-image-preview' was retired"],
+            }
+        )
+        mock_get_client.return_value = mock_client
+
+        result = await generate_image_fn(
+            prompt="test prompt", model="gemini-3.1-flash-image-preview"
+        )
+
+        assert result["success"] is True
+        assert result["warnings"] == [
+            "Model 'gemini-3.1-flash-image-preview' was retired"
+        ]
+        assert result["details"]["model"] == "gemini-nano-banana-2.1"
+
+    @pytest.mark.asyncio
+    @patch("pixelforge_mcp.server.get_api_client")
+    @patch("pixelforge_mcp.server.get_config")
+    async def test_retired_model_error_reaches_response(
+        self, mock_config, mock_get_client, tmp_path
+    ):
+        """A retired Imagen ID produces a failed response naming the fix."""
+        mock_config.return_value.storage.output_dir = tmp_path
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = Mock()
+        mock_get_client.return_value = client
+
+        result = await generate_image_fn(
+            prompt="test prompt", model="imagen-4.0-generate-001"
+        )
+
+        assert result["success"] is False
+        assert "retired" in result["errors"][0]
+        assert "gemini-nano-banana-2.1" in result["errors"][0]
+        client._genai_client.aio.models.generate_content.assert_not_called()
+
+
+# ------------------------------------------------------------------
+# list_available_models / get_server_info
+# ------------------------------------------------------------------
+
+
+class TestListAvailableModels:
+    """Tests for the list_available_models tool handler."""
+
+    @pytest.mark.asyncio
+    @patch("pixelforge_mcp.server.get_api_client")
+    async def test_returns_image_models_and_recommendation(self, mock_get_client):
+        """The handler passes through the model list and the recommendation."""
+        mock_get_client.return_value = ImagenAPIClient(api_key="test-key")
+
+        result = await server_module.list_available_models()
+
+        assert result["success"] is True
+        assert [m["name"] for m in result["models"]] == IMAGE_MODELS
+        assert "gemini-nano-banana-2.1" in result["recommendation"]
+
+    @pytest.mark.asyncio
+    @patch("pixelforge_mcp.server.get_api_client")
+    async def test_fallback_lists_stable_models_only(self, mock_get_client):
+        """If the client reports failure, the fallback names stable models."""
+        client = Mock()
+        client.list_models = AsyncMock(
+            return_value=GenerationResult(success=False, output="", error="boom")
+        )
+        mock_get_client.return_value = client
+
+        result = await server_module.list_available_models()
+
+        names = [m["name"] for m in result["models"]]
+        assert names == [
+            "gemini-nano-banana-2.1",
+            "gemini-3.1-flash-lite-image",
+            "gemini-3.1-flash-image",
+            "gemini-3-pro-image",
+        ]
+        assert [m["name"] for m in result["models"] if m["default"]] == [
+            "gemini-nano-banana-2.1"
+        ]
+
+
+class TestGetServerInfo:
+    """Tests for get_server_info feature text."""
+
+    def test_person_generation_text_is_not_imagen_specific(self):
+        """person_generation is described as accepted but not enforced."""
+        info = server_module.get_server_info()
+
+        text = info["features"]["person_generation"]
+        assert "not enforced" in text
+        assert "Imagen" not in text
+
+    def test_default_model_is_nano_banana_2_1(self):
+        """The reported default model is the stable default."""
+        info = server_module.get_server_info()
+
+        assert info["imagen"]["default_model"] == "gemini-nano-banana-2.1"
+
+
+class TestToolCount:
+    """The documented tool count must match the registered tools."""
+
+    def test_nineteen_tools_registered(self):
+        """Count @mcp.tool() registrations in the server source."""
+        source = Path(server_module.__file__).read_text()
+        assert source.count("@mcp.tool()") == 19

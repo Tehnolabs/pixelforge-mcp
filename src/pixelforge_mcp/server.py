@@ -143,21 +143,27 @@ async def generate_image(
         aspect_ratio: Image dimensions (1:1, 16:9, 9:16, etc.)
         temperature: Creativity level 0.0-2.0
         model: Model override. Options:
-            - "gemini-2.5-flash-image" (default): Fast, cheap
-            - "gemini-3-pro-image-preview": Best text, complex edits
-            - "gemini-3.1-flash-image-preview": Panoramic, fast 4K
-        quality: Quality preset: "fast" (cheapest), "balanced"
-            (good quality), or "quality" (best output). Mutually
-            exclusive with 'model'.
+            - "gemini-nano-banana-2.1" (default): Best all-round,
+              panoramic, grounding
+            - "gemini-3.1-flash-lite-image": Fastest, cheapest, 1K only
+            - "gemini-3.1-flash-image": Panoramic, grounding, 0.5K tier
+            - "gemini-3-pro-image": Best text rendering, complex edits
+        quality: Quality preset: "fast" (gemini-3.1-flash-lite-image),
+            "balanced" (gemini-nano-banana-2.1), or "quality"
+            (gemini-3-pro-image, 2K). Mutually exclusive with 'model'.
         safety_setting: Safety filter (preset:strict, preset:relaxed)
-        image_size: Resolution: "1K" (default), "2K", or "4K"
+        image_size: Resolution: "0.5K" (gemini-3.1-flash-image only),
+            "1K" (default), "2K", or "4K". 2K/4K are not supported by
+            gemini-3.1-flash-lite-image.
         number_of_images: Generate 1-4 variations (default: 1)
         output_format: File format: "png", "jpeg", or "webp"
-        person_generation: People in images: "allow", "adults_only"
-            (no minors), or "block" (no people). Only enforced with
-            Imagen models. Gemini has built-in person restrictions.
+        person_generation: Accepted for compatibility ("allow",
+            "adults_only", "block"). Not enforced by the Gemini API;
+            Gemini applies its own built-in restrictions on
+            identifiable people.
         reference_images: Paths to reference images for style/character
-            consistency (up to 14 images)
+            consistency (up to 14 images on gemini-nano-banana-2.1
+            and gemini-3.1-flash-image; 6 on gemini-3-pro-image)
         thinking_budget: Thinking budget for extended reasoning
             (0-24576 tokens). Higher = deeper reasoning.
 
@@ -174,7 +180,7 @@ async def generate_image(
 
         generate_image(
             prompt="Product photo of a watch",
-            model="gemini-3.1-flash-image-preview",
+            model="gemini-3.1-flash-image",
             image_size="4K",
             output_format="webp"
         )
@@ -326,8 +332,8 @@ async def edit_image(
         input_image_path: Path to the image to edit
         output_filename: Custom filename for edited image (optional)
         temperature: Creativity level 0.0-2.0
-        model: Model override. "gemini-3-pro-image-preview" best
-            for complex multi-turn edits.
+        model: Model override. Default "gemini-nano-banana-2.1";
+            "gemini-3-pro-image" is best for complex multi-turn edits.
         output_format: File format: "png", "jpeg", or "webp"
 
     Returns:
@@ -337,7 +343,7 @@ async def edit_image(
         edit_image(
             prompt="Add a rainbow in the sky",
             input_image_path="/path/to/image.png",
-            model="gemini-3-pro-image-preview"
+            model="gemini-3-pro-image"
         )
     """
     logger.info(f"Editing image: {input_image_path}")
@@ -1211,7 +1217,9 @@ async def estimate_cost(
 
     Args:
         operation: "generate", "edit", or "analyze"
-        model: Model to estimate for (default: all models)
+        model: Model to estimate for (default: all models that
+            support the operation). Image models price generate/edit
+            per image at 1K; text models price analyze per call.
         number_of_images: Number of images (default: 1)
 
     Returns:
@@ -1221,7 +1229,7 @@ async def estimate_cost(
         estimate_cost(operation="generate")
         estimate_cost(
             operation="generate",
-            model="gemini-3-pro-image-preview",
+            model="gemini-3-pro-image",
             number_of_images=10
         )
     """
@@ -1254,7 +1262,9 @@ async def estimate_cost(
             # All models comparison
             estimates = []
             for model_name, costs in COST_TABLE.items():
-                unit_cost = costs.get(inputs.operation, 0)
+                if inputs.operation not in costs:
+                    continue
+                unit_cost = costs[inputs.operation]
                 total = unit_cost * inputs.number_of_images
                 estimates.append(
                     {
@@ -1480,17 +1490,22 @@ async def list_available_models() -> Dict[str, Any]:
                 "success": True,
                 "models": [
                     {
-                        "name": "gemini-2.5-flash-image",
-                        "description": "Fast model for iterations",
+                        "name": "gemini-nano-banana-2.1",
+                        "description": "Best all-round, panoramic, grounded",
                         "default": True,
                     },
                     {
-                        "name": "gemini-3.1-flash-image-preview",
-                        "description": "Panoramic, grounded, 4K",
+                        "name": "gemini-3.1-flash-lite-image",
+                        "description": "Fastest and cheapest, 1K only",
                         "default": False,
                     },
                     {
-                        "name": "gemini-3-pro-image-preview",
+                        "name": "gemini-3.1-flash-image",
+                        "description": "Panoramic, grounded, 0.5K-4K",
+                        "default": False,
+                    },
+                    {
+                        "name": "gemini-3-pro-image",
                         "description": "Max text fidelity",
                         "default": False,
                     },
@@ -1565,10 +1580,11 @@ def get_server_info() -> Dict[str, Any]:
             "setup": "Set GOOGLE_CLOUD_PROJECT and install pixelforge-mcp[vertex]",
         },
         "features": {
-            "resolution_control": "1K/2K/4K via image_size",
+            "resolution_control": "0.5K/1K/2K/4K via image_size",
             "multi_image": "1-4 variations via number_of_images",
             "output_formats": "png, jpeg, webp",
-            "person_generation": "allow, adults_only, block (Imagen models only)",
+            "person_generation": "Accepted for compatibility, not enforced "
+            "by the Gemini API",
             "reference_images": "Up to 14 style/character refs",
             "prompt_optimization": "AI-enhanced prompts",
             "ocr": "Text extraction from images",

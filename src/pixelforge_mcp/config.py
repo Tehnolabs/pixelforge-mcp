@@ -26,11 +26,11 @@ class MaskedStr(SecretStr):
 
 
 class ImagenConfig(BaseModel):
-    """Gemini Imagen CLI configuration."""
+    """Image generation defaults."""
 
     api_key: Optional[MaskedStr] = Field(default=None, description="Google API key")
     default_model: str = Field(
-        default="gemini-2.5-flash-image",
+        default="gemini-nano-banana-2.1",
         description="Default image generation model",
     )
     default_aspect_ratio: str = Field(default="1:1", description="Default aspect ratio")

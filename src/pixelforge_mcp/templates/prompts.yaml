@@ -3,7 +3,7 @@ templates:
   - name: product_hero
     category: product_photography
     template: "Professional product photography of {subject}, studio lighting, clean white background, 4K detail, commercial quality"
-    recommended_model: gemini-3-pro-image-preview
+    recommended_model: gemini-3-pro-image
     recommended_aspect_ratio: "4:3"
 
   - name: product_lifestyle
@@ -57,7 +57,7 @@ templates:
   - name: headshot_professional
     category: portrait
     template: "Professional headshot portrait of {subject}, studio lighting, neutral background, sharp focus, corporate quality"
-    recommended_model: gemini-3-pro-image-preview
+    recommended_model: gemini-3-pro-image
     recommended_aspect_ratio: "3:4"
 
   - name: character_portrait
@@ -124,11 +124,11 @@ templates:
   - name: landscape_panoramic
     category: panoramic
     template: "Panoramic landscape of {subject}, ultra-wide view, dramatic sky, golden hour, National Geographic quality"
-    recommended_model: gemini-3.1-flash-image-preview
+    recommended_model: gemini-nano-banana-2.1
     recommended_aspect_ratio: "4:1"
 
   - name: city_skyline
     category: panoramic
     template: "Panoramic city skyline of {subject}, twilight, city lights reflecting, ultra-wide perspective"
-    recommended_model: gemini-3.1-flash-image-preview
+    recommended_model: gemini-nano-banana-2.1
     recommended_aspect_ratio: "4:1"

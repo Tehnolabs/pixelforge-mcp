@@ -8,9 +8,15 @@ from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from PIL import Image
+
+from .validation import (
+    DEFAULT_MODEL,
+    DEPRECATED_MODEL_ALIASES,
+    RETIRED_MODELS,
+)
 
 if TYPE_CHECKING:
     from google.genai import types
@@ -98,20 +104,13 @@ class GenerationResult:
 class ImagenAPIClient:
     """Client for image generation via google-genai SDK.
 
-    All methods use the google-genai SDK directly for generate_content
-    (Gemini models) and generate_images (Imagen 4 family).
+    All methods use the google-genai SDK directly via generate_content
+    (Gemini image and text models).
     """
-
-    # Imagen 4 model name prefixes for auto-routing
-    IMAGEN4_MODELS = {
-        "imagen-4.0-generate-001",
-        "imagen-4.0-ultra-generate-001",
-        "imagen-4.0-fast-generate-001",
-    }
 
     def __init__(
         self,
-        model_name: str = "gemini-2.5-flash-image",
+        model_name: str = DEFAULT_MODEL,
         api_key: Optional[str] = None,
         log_images: bool = False,
     ):
@@ -141,6 +140,37 @@ class ImagenAPIClient:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _retired_model_error(model: str) -> Optional["GenerationResult"]:
+        """Return a failed result if the model was retired, else None."""
+        replacement = RETIRED_MODELS.get(model)
+        if replacement is None:
+            return None
+        return GenerationResult(
+            success=False,
+            output="",
+            error=(
+                f"Model '{model}' was retired by Google on 2026-08-17 and is "
+                "no longer served by the Gemini API. "
+                f"Use '{replacement}' instead (quality='balanced')."
+            ),
+        )
+
+    @staticmethod
+    def _resolve_deprecated_alias(model: str) -> Tuple[str, Optional[str]]:
+        """Map a shut-down preview ID to its stable replacement.
+
+        Returns the model to call and a warning when it was rewritten.
+        """
+        replacement = DEPRECATED_MODEL_ALIASES.get(model)
+        if replacement is None:
+            return model, None
+        return replacement, (
+            f"Model '{model}' was retired by Google on 2026-06-25. "
+            f"Using '{replacement}' instead. "
+            f"Update your configuration to use '{replacement}' directly."
+        )
 
     @staticmethod
     def _build_safety_settings(
@@ -376,6 +406,7 @@ class ImagenAPIClient:
         reference_images: Optional[List[str]] = None,
         output_format: str = "png",
         thinking_budget: Optional[int] = None,
+        alias_warning: Optional[str] = None,
     ) -> GenerationResult:
         """Generate using google-genai SDK directly."""
         try:
@@ -392,7 +423,6 @@ class ImagenAPIClient:
             # NOTE: person_generation is NOT passed to ImageConfig.
             # The Gemini API (generate_content) does not support it —
             # the SDK raises ValueError in _ImageConfig_to_mldev().
-            # Only Imagen (generate_images / GenerateImagesConfig) supports it.
 
             # Build GenerateContentConfig
             config_params: Dict[str, Any] = {
@@ -464,16 +494,18 @@ class ImagenAPIClient:
                         len(reference_images) if reference_images else 0
                     ),
                 }
+                warnings: List[str] = []
+                if alias_warning:
+                    warnings.append(alias_warning)
                 if person_generation:
-                    data["warnings"] = [
-                        f"person_generation='{person_generation}' is only"
-                        " enforced with Imagen models. Gemini blocks"
-                        " photorealistic identifiable people by default"
-                        " but still generates fictional/illustrated"
-                        " people. For strict enforcement, use an Imagen"
-                        " model directly"
-                        " (e.g. model='imagen-4.0-generate-001')."
-                    ]
+                    warnings.append(
+                        f"person_generation='{person_generation}' is accepted"
+                        " for compatibility but is not enforced by the Gemini"
+                        " API. Gemini applies built-in restrictions on"
+                        " photorealistic identifiable people."
+                    )
+                if warnings:
+                    data["warnings"] = warnings
                 return GenerationResult(
                     success=True,
                     output=(f"Image generated successfully at {output_path}"),
@@ -493,92 +525,6 @@ class ImagenAPIClient:
             logger.error(f"SDK image generation failed: {error_msg}", exc_info=True)
             return GenerationResult(success=False, output="", error=error_msg)
 
-    async def _generate_via_imagen4(
-        self,
-        prompt: str,
-        output_path: Path,
-        model: str,
-        aspect_ratio: Optional[str] = None,
-        image_size: Optional[str] = None,
-        person_generation: Optional[str] = None,
-        output_format: str = "png",
-    ) -> GenerationResult:
-        """Generate using Imagen 4 via client.models.generate_images().
-
-        This API is sync-only, so we wrap it with asyncio.to_thread.
-        Note: negative_prompt is not supported in Imagen 4.
-        """
-        try:
-            from google.genai import types
-
-            from .validation import PERSON_GENERATION_SDK_MAP
-
-            client = self._get_genai_client()
-
-            config_params: Dict[str, Any] = {
-                "number_of_images": 1,
-            }
-            if aspect_ratio:
-                config_params["aspect_ratio"] = aspect_ratio
-            if image_size:
-                config_params["image_size"] = image_size
-            if person_generation:
-                sdk_value = PERSON_GENERATION_SDK_MAP.get(person_generation)
-                if sdk_value:
-                    config_params["person_generation"] = sdk_value
-
-            # Map output_format to MIME type
-            mime_map = {"png": "image/png", "jpeg": "image/jpeg", "webp": "image/webp"}
-            config_params["output_mime_type"] = mime_map.get(output_format, "image/png")
-
-            config = types.GenerateImagesConfig(**config_params)
-
-            # generate_images is sync-only — wrap for async compatibility
-            response = await asyncio.to_thread(
-                client.models.generate_images,
-                model=model,
-                prompt=prompt,
-                config=config,
-            )
-
-            if response.generated_images:
-                genai_img = response.generated_images[0].image
-                img = Image.open(BytesIO(genai_img.image_bytes))
-                self._save_image(img, output_path, output_format)
-                self._embed_metadata(
-                    output_path,
-                    output_format,
-                    {
-                        "prompt": prompt,
-                        "model": model,
-                        "aspect_ratio": aspect_ratio,
-                        "timestamp": datetime.now().isoformat(),
-                    },
-                )
-                return GenerationResult(
-                    success=True,
-                    output=f"Image generated successfully at {output_path}",
-                    images=[img],
-                    image_paths=[str(output_path)],
-                    data={
-                        "model": model,
-                        "aspect_ratio": aspect_ratio,
-                        "image_size": image_size,
-                        "person_generation": person_generation,
-                    },
-                )
-            else:
-                return GenerationResult(
-                    success=False,
-                    output="",
-                    error="No images generated",
-                )
-
-        except Exception as e:
-            error_msg = self._classify_error(e)
-            logger.error(f"Imagen 4 generation failed: {error_msg}", exc_info=True)
-            return GenerationResult(success=False, output="", error=error_msg)
-
     async def generate(
         self,
         prompt: str,
@@ -595,23 +541,17 @@ class ImagenAPIClient:
     ) -> GenerationResult:
         """Generate an image from a text prompt.
 
-        Auto-routes to the correct SDK method based on model:
-        - Imagen 4 models → client.models.generate_images()
-        - Gemini models → client.aio.models.generate_content()
+        Calls client.aio.models.generate_content(). Retired model IDs
+        (see RETIRED_MODELS) return an error naming the replacement.
+        Shut-down preview IDs are rewritten to their stable replacements
+        with a warning.
         """
         use_model = model or self.model_name
 
-        # Imagen 4 uses a different API
-        if use_model in self.IMAGEN4_MODELS:
-            return await self._generate_via_imagen4(
-                prompt=prompt,
-                output_path=output_path,
-                model=use_model,
-                aspect_ratio=aspect_ratio,
-                image_size=image_size,
-                person_generation=person_generation,
-                output_format=output_format,
-            )
+        retired = self._retired_model_error(use_model)
+        if retired is not None:
+            return retired
+        use_model, alias_warning = self._resolve_deprecated_alias(use_model)
 
         return await self._generate_via_sdk(
             prompt=prompt,
@@ -625,6 +565,7 @@ class ImagenAPIClient:
             reference_images=reference_images,
             output_format=output_format,
             thinking_budget=thinking_budget,
+            alias_warning=alias_warning,
         )
 
     async def edit(
@@ -637,11 +578,17 @@ class ImagenAPIClient:
         output_format: str = "png",
     ) -> GenerationResult:
         """Edit an existing image with a text prompt via direct SDK."""
+        use_model = model or self.model_name
+
+        retired = self._retired_model_error(use_model)
+        if retired is not None:
+            return retired
+        use_model, alias_warning = self._resolve_deprecated_alias(use_model)
+
         try:
             from google.genai import types
 
             client = self._get_genai_client()
-            use_model = model or self.model_name
 
             # Load input image
             input_img = Image.open(str(input_path))
@@ -676,15 +623,18 @@ class ImagenAPIClient:
 
             if images:
                 self._save_image(images[0], output_path, output_format)
+                edit_data: Dict[str, Any] = {
+                    "model": use_model,
+                    "temperature": temperature,
+                }
+                if alias_warning:
+                    edit_data["warnings"] = [alias_warning]
                 return GenerationResult(
                     success=True,
                     output=f"Image edited successfully at {output_path}",
                     images=images,
                     image_paths=[str(output_path)],
-                    data={
-                        "model": use_model,
-                        "temperature": temperature,
-                    },
+                    data=edit_data,
                 )
             else:
                 return GenerationResult(
@@ -1134,20 +1084,132 @@ class ImagenAPIClient:
 
     async def list_models(self) -> GenerationResult:
         """List available generation models with detailed metadata."""
-        models = [
+        temperature = {"min": 0.0, "max": 2.0, "default": 1.0}
+        models: List[Dict[str, Any]] = [
+            {
+                "name": "gemini-nano-banana-2.1",
+                "nickname": "Nano Banana 2.1",
+                "speed": "fast",
+                "quality": "excellent",
+                "default": True,
+                "description": "Google's recommended default. Excellent quality "
+                "at Flash speed with grounding, thinking levels, and "
+                "panoramic ratios.",
+                "best_for": [
+                    "General-purpose generation (default)",
+                    "Panoramic aspect ratios (1:4, 4:1, 1:8, 8:1)",
+                    "Grounded generation (web + Google Image Search)",
+                    "Multi-turn editing and up to 14 reference images",
+                    "Output up to 4K",
+                ],
+                "capabilities": {
+                    "text_rendering": "excellent",
+                    "complex_scenes": "excellent",
+                    "editing": "multi-turn",
+                    "resolution": "1K/2K/4K",
+                    "person_generation": False,
+                    "grounding": "web search + Google Image Search",
+                    "thinking": "minimal/medium/high",
+                    "panoramic": True,
+                    "reference_images": 14,
+                },
+                "temperature": dict(temperature),
+                "pricing": {"0.5K": None, "1K": 0.0336, "2K": 0.0504, "4K": 0.113},
+            },
+            {
+                "name": "gemini-3.1-flash-lite-image",
+                "nickname": "Nano Banana 2 Lite",
+                "speed": "fastest",
+                "quality": "good",
+                "default": False,
+                "description": "Fastest and cheapest stable model. 1K output "
+                "only, no panoramic ratios, no grounding. Not optimized for "
+                "multiple reference inputs or multi-turn editing.",
+                "best_for": [
+                    "Rapid iteration and prototyping",
+                    "High-volume, cost-sensitive generation",
+                    "Standard aspect ratios at 1K",
+                ],
+                "capabilities": {
+                    "text_rendering": "good",
+                    "complex_scenes": "moderate",
+                    "editing": "basic (not optimized for multi-turn)",
+                    "resolution": "1K",
+                    "person_generation": False,
+                    "grounding": False,
+                    "thinking": None,
+                    "panoramic": False,
+                    "reference_images": None,
+                },
+                "temperature": dict(temperature),
+                "pricing": {"0.5K": None, "1K": 0.0336, "2K": None, "4K": None},
+            },
+            {
+                "name": "gemini-3.1-flash-image",
+                "nickname": "Nano Banana 2",
+                "speed": "fast",
+                "quality": "excellent",
+                "default": False,
+                "description": "Previous-generation workhorse. Panoramic "
+                "ratios, grounding, and a 0.5K tier for rapid iteration.",
+                "best_for": [
+                    "Panoramic aspect ratios (1:4, 4:1, 1:8, 8:1)",
+                    "Grounded generation (web + Google Image Search)",
+                    "0.5K rapid iteration tier",
+                    "Up to 14 reference images",
+                ],
+                "capabilities": {
+                    "text_rendering": "excellent",
+                    "complex_scenes": "excellent",
+                    "editing": "multi-turn",
+                    "resolution": "0.5K/1K/2K/4K",
+                    "person_generation": False,
+                    "grounding": "web search + Google Image Search",
+                    "thinking": True,
+                    "panoramic": True,
+                    "reference_images": 14,
+                },
+                "temperature": dict(temperature),
+                "pricing": {"0.5K": 0.045, "1K": 0.067, "2K": 0.101, "4K": 0.151},
+            },
+            {
+                "name": "gemini-3-pro-image",
+                "nickname": "Nano Banana Pro",
+                "speed": "moderate",
+                "quality": "excellent",
+                "default": False,
+                "description": "Highest quality and best text rendering, "
+                "with deep reasoning for complex prompts.",
+                "best_for": [
+                    "Highest text rendering accuracy",
+                    "Complex multi-turn editing workflows",
+                    "Deep reasoning on intricate prompts",
+                    "Character and style consistency",
+                ],
+                "capabilities": {
+                    "text_rendering": "excellent",
+                    "complex_scenes": "excellent",
+                    "editing": "advanced multi-turn",
+                    "resolution": "1K/2K/4K",
+                    "person_generation": False,
+                    "grounding": "web search",
+                    "thinking": "always on",
+                    "panoramic": False,
+                    "reference_images": 6,
+                },
+                "temperature": dict(temperature),
+                "pricing": {"0.5K": None, "1K": 0.134, "2K": 0.134, "4K": 0.24},
+            },
             {
                 "name": "gemini-2.5-flash-image",
                 "nickname": "Nano Banana",
                 "speed": "fast",
                 "quality": "good",
-                "default": True,
-                "description": "Optimized for speed and efficiency. "
-                "Best for high-volume, low-latency tasks.",
+                "default": False,
+                "description": "Deprecated legacy model. Google has announced "
+                "its shutdown.",
                 "best_for": [
-                    "Quick iterations and concept exploration",
-                    "High-volume batch generation",
-                    "Simple compositions and designs",
-                    "When speed matters more than perfection",
+                    "Existing workflows that have not migrated yet",
                 ],
                 "capabilities": {
                     "text_rendering": "basic",
@@ -1155,143 +1217,15 @@ class ImagenAPIClient:
                     "editing": "basic",
                     "resolution": "1K",
                     "person_generation": False,
+                    "grounding": False,
+                    "thinking": False,
+                    "panoramic": False,
+                    "reference_images": 3,
                 },
-                "temperature": {
-                    "min": 0.0,
-                    "max": 2.0,
-                    "default": 1.0,
-                },
-            },
-            {
-                "name": "gemini-3-pro-image-preview",
-                "nickname": "Nano Banana Pro",
-                "speed": "moderate",
-                "quality": "excellent",
-                "default": False,
-                "description": "Max text fidelity (~94%), "
-                "deep reasoning for complex prompts.",
-                "best_for": [
-                    "Highest text rendering accuracy (~94%)",
-                    "Complex multi-turn editing workflows",
-                    "Deep reasoning on intricate prompts",
-                    "Character consistency (up to 5 chars)",
-                ],
-                "capabilities": {
-                    "text_rendering": "excellent (~94%)",
-                    "complex_scenes": "excellent",
-                    "editing": "advanced multi-turn",
-                    "resolution": "1K/2K/4K",
-                    "reference_inputs": "6 objects + 5 characters",
-                    "thinking_process": True,
-                    "grounding": "web search",
-                    "person_generation": False,
-                },
-                "temperature": {
-                    "min": 0.0,
-                    "max": 2.0,
-                    "default": 1.0,
-                },
-            },
-            {
-                "name": "gemini-3.1-flash-image-preview",
-                "nickname": "Nano Banana 2",
-                "speed": "fast",
-                "quality": "excellent",
-                "default": False,
-                "description": "Excellent quality at Flash speed. "
-                "Panoramic ratios, web+image grounding, 512px tier.",
-                "best_for": [
-                    "Panoramic aspect ratios (1:4, 4:1, 1:8, 8:1)",
-                    "Grounded generation (web + Google Image Search)",
-                    "Fast 4K output (4-6s vs Pro's 8-12s)",
-                    "512px rapid iteration tier",
-                    "Cost-sensitive high-volume generation",
-                ],
-                "capabilities": {
-                    "text_rendering": "excellent",
-                    "resolution": "512px/1K/2K/4K",
-                    "panoramic_ratios": True,
-                    "reference_inputs": ("up to 14 objects + 5 characters"),
-                    "thinking_process": True,
-                    "grounding": ("web search + Google Image Search"),
-                    "person_generation": False,
-                },
-                "temperature": {
-                    "min": 0.0,
-                    "max": 2.0,
-                    "default": 1.0,
-                },
-            },
-            {
-                "name": "imagen-4.0-generate-001",
-                "nickname": "Imagen 4",
-                "speed": "moderate",
-                "quality": "excellent",
-                "default": False,
-                "description": "Dedicated image generation model. "
-                "Cheapest at ~$0.04/img. Text-to-image only.",
-                "best_for": [
-                    "Cost-effective batch generation",
-                    "High-quality standalone images",
-                    "When editing is not needed",
-                ],
-                "capabilities": {
-                    "text_rendering": "good",
-                    "complex_scenes": "excellent",
-                    "editing": False,
-                    "resolution": "1K/2K",
-                    "person_generation": True,
-                },
-                "temperature": None,
-                "note": "Uses a separate API (generate_images). "
-                "No editing, no temperature control.",
-            },
-            {
-                "name": "imagen-4.0-ultra-generate-001",
-                "nickname": "Imagen 4 Ultra",
-                "speed": "moderate",
-                "quality": "excellent",
-                "default": False,
-                "description": "Highest quality Imagen model. "
-                "~$0.06/img. Best for premium output.",
-                "best_for": [
-                    "Maximum image quality",
-                    "Premium production assets",
-                    "When quality matters more than cost",
-                ],
-                "capabilities": {
-                    "text_rendering": "excellent",
-                    "complex_scenes": "excellent",
-                    "editing": False,
-                    "resolution": "1K/2K",
-                    "person_generation": True,
-                },
-                "temperature": None,
-                "note": "Uses a separate API (generate_images). "
-                "No editing, no temperature control.",
-            },
-            {
-                "name": "imagen-4.0-fast-generate-001",
-                "nickname": "Imagen 4 Fast",
-                "speed": "fast",
-                "quality": "good",
-                "default": False,
-                "description": "Fastest Imagen model. ~$0.02/img.",
-                "best_for": [
-                    "Rapid prototyping",
-                    "High-volume generation",
-                    "Cost-sensitive workloads",
-                ],
-                "capabilities": {
-                    "text_rendering": "basic",
-                    "complex_scenes": "good",
-                    "editing": False,
-                    "resolution": "1K",
-                    "person_generation": True,
-                },
-                "temperature": None,
-                "note": "Uses a separate API (generate_images). "
-                "No editing, no temperature control.",
+                "temperature": dict(temperature),
+                "pricing": {"0.5K": None, "1K": 0.039, "2K": None, "4K": None},
+                "deprecated": True,
+                "replacement": "gemini-3.1-flash-lite-image",
             },
         ]
 
@@ -1301,11 +1235,9 @@ class ImagenAPIClient:
             data={
                 "models": models,
                 "recommendation": (
-                    "Use gemini-2.5-flash-image for speed, "
-                    "gemini-3-pro-image-preview for quality, "
-                    "gemini-3.1-flash-image-preview for "
-                    "quality+speed and panoramic ratios, "
-                    "imagen-4.0-fast-generate-001 for cheapest"
+                    "Use quality presets: fast (gemini-3.1-flash-lite-image), "
+                    "balanced (gemini-nano-banana-2.1, default), "
+                    "quality (gemini-3-pro-image)."
                 ),
             },
         )
