@@ -51,7 +51,7 @@ pytest tests/integration/ -v
 pixelforge-mcp/
 ├── src/pixelforge_mcp/
 │   ├── config.py         # Pydantic config, VertexConfig
-│   ├── server.py         # FastMCP server with 21 async tools
+│   ├── server.py         # FastMCP server with 19 async tools
 │   ├── templates/        # Prompt template YAML files
 │   └── utils/
 │       ├── api_client.py # Direct google-genai SDK client

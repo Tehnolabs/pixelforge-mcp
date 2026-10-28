@@ -124,7 +124,7 @@ For advanced settings, create `config/config.yaml`:
 
 ```yaml
 imagen:
-  default_model: "gemini-2.5-flash-image"
+  default_model: "gemini-nano-banana-2.1"
   default_aspect_ratio: "1:1"
   default_temperature: 0.7
   safety_setting: "preset:strict"

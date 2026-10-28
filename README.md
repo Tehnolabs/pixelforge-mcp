@@ -8,12 +8,12 @@
   <img src="https://raw.githubusercontent.com/Tehnolabs/pixelforge-mcp/main/docs/assets/hero.png" alt="PixelForge MCP" width="600">
 </p>
 
-An MCP server for AI-powered image generation, editing, analysis, and transformation using Google's Gemini and Imagen 4 models.
+An MCP server for AI-powered image generation, editing, analysis, and transformation using Google's Gemini image models.
 
 ## Features
 
-- **21 MCP tools** for image generation, editing, analysis, transformation, and more
-- **6 models** including Gemini image models and Imagen 4 family
+- **19 MCP tools** for image generation, editing, analysis, transformation, and more
+- **4 stable Gemini image models** (Nano Banana 2.1, 2 Lite, 2, and Pro) plus configurable analysis models
 - **Quality presets** (fast/balanced/quality) for simplified model selection
 - **Parallel multi-image generation** via asyncio.gather
 - **Image transforms** — crop, resize, rotate, flip, blur, sharpen, grayscale, watermark
@@ -111,7 +111,7 @@ Restart Claude Desktop after saving.
 
 ### Use
 
-Ask Claude to generate, edit, or analyze images — all 21 tools are available automatically.
+Ask Claude to generate, edit, or analyze images — all 19 tools are available automatically.
 
 ## Available Tools
 
@@ -119,7 +119,7 @@ Ask Claude to generate, edit, or analyze images — all 21 tools are available a
 
 | Tool | Description |
 |------|-------------|
-| `generate_image` | Generate images from text (6 models, 14 aspect ratios, quality presets, parallel multi-image) |
+| `generate_image` | Generate images from text (4 models, 14 aspect ratios, quality presets, parallel multi-image) |
 | `edit_image` | Modify existing images with text prompts |
 | `remove_background` | Remove image background (transparent or white) |
 | `transform_image` | Crop, resize, rotate, flip, blur, sharpen, grayscale, or watermark |
@@ -129,10 +129,12 @@ Ask Claude to generate, edit, or analyze images — all 21 tools are available a
 
 | Tool | Description |
 |------|-------------|
-| `analyze_image` | AI-powered image description with optional grounding |
+| `analyze_image` | AI-powered image description with optional grounding and `model` override |
 | `extract_text` | OCR — extract text with confidence levels |
 | `detect_objects` | Detect objects with bounding boxes |
 | `compare_images` | Compare 2-10 images for differences |
+
+Analysis tools and `optimize_prompt` accept a `model` override. The default is `gemini-3.5-flash-lite`; use `gemini-3.8-flash` for harder OCR or reasoning.
 
 ### Utility
 
@@ -161,32 +163,36 @@ Ask Claude to generate, edit, or analyze images — all 21 tools are available a
 
 ## Model Selection
 
-PixelForge supports **per-request model switching** with 6 models:
+PixelForge supports **per-request model switching** with 4 stable Gemini image models:
 
-### Gemini Models (via Gemini API)
-
-| Use case | Model | Why |
-|----------|-------|-----|
-| Fast iterations | `gemini-2.5-flash-image` (default) | Cheapest, lowest latency |
-| Panoramic & grounded | `gemini-3.1-flash-image-preview` | 1:4/4:1/1:8/8:1, web+image grounding |
-| Max text fidelity | `gemini-3-pro-image-preview` | ~94% accuracy, complex multi-turn edits |
-
-### Imagen 4 Models (via Gemini API)
+### Image Models (via Gemini API)
 
 | Use case | Model | Why |
 |----------|-------|-----|
-| Cost-effective batch | `imagen-4.0-generate-001` | $0.04/img, excellent quality |
-| Cheapest generation | `imagen-4.0-fast-generate-001` | $0.02/img, fastest |
-| Maximum quality | `imagen-4.0-ultra-generate-001` | $0.06/img, best output |
+| General use (default) | `gemini-nano-banana-2.1` | 1K/2K/4K, web+image grounding, thinking levels, 1:4/4:1/1:8/8:1, up to 14 references. $0.0336/img at 1K |
+| Fastest, cheapest | `gemini-3.1-flash-lite-image` | 1K only, no panoramic, no grounding. $0.0336/img |
+| Previous-gen workhorse | `gemini-3.1-flash-image` | 0.5K/1K/2K/4K, panoramic, grounding. $0.067/img at 1K |
+| Max text fidelity | `gemini-3-pro-image` | Best text rendering, complex multi-turn edits. $0.134/img at 1K/2K |
+
+`gemini-2.5-flash-image` is deprecated (Google has announced its shutdown) and remains only for existing setups. Use `gemini-3.1-flash-lite-image` instead.
+
+### Analysis Models (text)
+
+Used by `analyze_image`, `extract_text`, `detect_objects`, `compare_images`, and `optimize_prompt`. Override per request with `model=`.
+
+| Model | Notes |
+|-------|-------|
+| `gemini-3.5-flash-lite` (default) | $0.30 in / $2.50 out per 1M tokens |
+| `gemini-3.8-flash` | Strongest. $0.75 in / $3.75 out per 1M tokens |
 
 ### Quality Presets
 
 Instead of choosing a model manually, use quality presets:
 
 ```
-generate_image(prompt="...", quality="fast")      # gemini-2.5-flash-image
-generate_image(prompt="...", quality="balanced")   # gemini-3.1-flash-image-preview + 1K
-generate_image(prompt="...", quality="quality")    # gemini-3-pro-image-preview + 2K
+generate_image(prompt="...", quality="fast")      # gemini-3.1-flash-lite-image
+generate_image(prompt="...", quality="balanced")   # gemini-nano-banana-2.1 + 1K
+generate_image(prompt="...", quality="quality")    # gemini-3-pro-image + 2K
 ```
 
 ## Vertex AI (Optional)
@@ -218,7 +224,7 @@ PixelForge auto-detects Vertex AI credentials and unlocks `upscale_image` and `a
 | `1:8` | Extra tall panoramic* |
 | `8:1` | Extra wide panoramic* |
 
-\* Panoramic ratios require `gemini-3.1-flash-image-preview` model
+\* Panoramic ratios require `gemini-nano-banana-2.1` or `gemini-3.1-flash-image`
 
 ## Troubleshooting
 

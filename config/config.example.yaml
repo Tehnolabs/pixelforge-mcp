@@ -7,7 +7,7 @@ imagen:
   api_key: null
 
   # Default model for generation
-  default_model: "gemini-2.5-flash-image"
+  default_model: "gemini-nano-banana-2.1"
 
   # Default aspect ratio for images
   default_aspect_ratio: "1:1"
