@@ -866,7 +866,10 @@ class ImagenAPIClient:
         # Adjust response for remove_background semantics
         if result.success:
             result.output = f"Background removed. Saved to {output_path}"
+            warnings = (result.data or {}).get("warnings")
             result.data = {"image_path": str(output_path)}
+            if warnings:
+                result.data["warnings"] = warnings
         elif result.error == "No images generated":
             result.error = "Background removal failed"
         return result

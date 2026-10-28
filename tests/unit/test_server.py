@@ -345,6 +345,18 @@ class TestEstimateCost:
         assert result["unit_cost_usd"] == COST_TABLE["gemini-3-pro-image"]["edit"]
 
     @pytest.mark.asyncio
+    async def test_single_model_unsupported_operation(self):
+        """A model that does not price the operation returns an error."""
+        from pixelforge_mcp.server import estimate_cost
+
+        result = await estimate_cost(
+            operation="analyze",
+            model="gemini-nano-banana-2.1",
+        )
+        assert result["success"] is False
+        assert "does not support" in result["message"]
+
+    @pytest.mark.asyncio
     async def test_single_model_analyze(self):
         """Test cost estimate for a single model analyze operation."""
         result = await estimate_cost_fn(

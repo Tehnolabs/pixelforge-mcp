@@ -1281,7 +1281,15 @@ async def estimate_cost(
                     "success": False,
                     "message": f"Unknown model: {inputs.model}",
                 }
-            unit_cost = costs.get(inputs.operation, 0)
+            if inputs.operation not in costs:
+                return {
+                    "success": False,
+                    "message": (
+                        f"Model {inputs.model} does not support "
+                        f"operation '{inputs.operation}'"
+                    ),
+                }
+            unit_cost = costs[inputs.operation]
             total = unit_cost * inputs.number_of_images
             return {
                 "success": True,
