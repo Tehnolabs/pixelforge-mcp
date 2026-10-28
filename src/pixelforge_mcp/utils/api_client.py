@@ -8,9 +8,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from PIL import Image
+
+if TYPE_CHECKING:
+    from google.genai import types
 
 logger = logging.getLogger(__name__)
 
@@ -1046,13 +1049,13 @@ class ImagenAPIClient:
             client = self._get_vertex_client()
 
             # Map user-friendly mode names to SDK enum values
-            mode_map = {
-                "inpaint_removal": "EDIT_MODE_INPAINT_REMOVAL",
-                "inpaint_insertion": "EDIT_MODE_INPAINT_INSERTION",
-                "outpaint": "EDIT_MODE_OUTPAINT",
-                "background_swap": "EDIT_MODE_BGSWAP",
-                "style_transfer": "EDIT_MODE_STYLE",
-                "product_image": "EDIT_MODE_PRODUCT_IMAGE",
+            mode_map: Dict[str, types.EditMode] = {
+                "inpaint_removal": types.EditMode.EDIT_MODE_INPAINT_REMOVAL,
+                "inpaint_insertion": types.EditMode.EDIT_MODE_INPAINT_INSERTION,
+                "outpaint": types.EditMode.EDIT_MODE_OUTPAINT,
+                "background_swap": types.EditMode.EDIT_MODE_BGSWAP,
+                "style_transfer": types.EditMode.EDIT_MODE_STYLE,
+                "product_image": types.EditMode.EDIT_MODE_PRODUCT_IMAGE,
             }
             sdk_mode = mode_map.get(edit_mode)
             if not sdk_mode:
@@ -1062,22 +1065,23 @@ class ImagenAPIClient:
                     error=f"Unknown edit mode: {edit_mode}",
                 )
 
-            img = Image.open(str(image_path))
-
-            # Build reference images
-            reference_images = [
+            # Build reference images (the SDK expects types.Image, not PIL)
+            reference_images: List[
+                Union[types.RawReferenceImage, types.MaskReferenceImage]
+            ] = [
                 types.RawReferenceImage(
-                    reference_image=img,
+                    reference_image=types.Image.from_file(location=str(image_path)),
                     reference_id=0,
                 )
             ]
             if mask_path:
-                mask_img = Image.open(str(mask_path))
                 reference_images.append(
                     types.MaskReferenceImage(
-                        reference_image=mask_img,
-                        reference_id=0,
-                        mask_mode="MASK_MODE_USER_PROVIDED",
+                        reference_image=types.Image.from_file(location=str(mask_path)),
+                        reference_id=1,
+                        config=types.MaskReferenceConfig(
+                            mask_mode=types.MaskReferenceMode.MASK_MODE_USER_PROVIDED,
+                        ),
                     )
                 )
 

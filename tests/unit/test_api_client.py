@@ -1,9 +1,10 @@
 """Unit tests for API client using google-genai SDK."""
 
 import io
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from google.genai import types
 from PIL import Image
 
 from pixelforge_mcp.utils.api_client import (
@@ -1324,3 +1325,149 @@ class TestPersonGenerationWarnOnly:
         assert "warnings" in result.data
         assert "Imagen" in result.data["warnings"][0]
         assert result.data["person_generation"] is None
+
+
+class TestAdvancedEdit:
+    """Tests for advanced_edit via the Vertex AI EditImage API."""
+
+    @staticmethod
+    def _write_png(path, color):
+        """Write a small real PNG and return its bytes."""
+        buf = io.BytesIO()
+        Image.new("RGB", (10, 10), color=color).save(buf, format="PNG")
+        path.write_bytes(buf.getvalue())
+        return buf.getvalue()
+
+    @staticmethod
+    def _vertex_client_returning_image(result_bytes):
+        """Build a mock Vertex client whose edit_image returns one image."""
+        mock_generated = Mock()
+        mock_generated.image = Mock(image_bytes=result_bytes)
+        mock_response = Mock()
+        mock_response.generated_images = [mock_generated]
+
+        mock_client = Mock()
+        mock_client.models.edit_image = Mock(return_value=mock_response)
+        return mock_client
+
+    @pytest.mark.asyncio
+    async def test_advanced_edit_with_mask_builds_sdk_references(self, tmp_path):
+        """Mask edits send two SDK reference images with a user-provided mask."""
+        image_path = tmp_path / "input.png"
+        mask_path = tmp_path / "mask.png"
+        raw_bytes = self._write_png(image_path, "red")
+        mask_bytes = self._write_png(mask_path, "white")
+        result_bytes = self._write_png(tmp_path / "result.png", "green")
+        mock_client = self._vertex_client_returning_image(result_bytes)
+        output_path = tmp_path / "edited.png"
+
+        client = ImagenAPIClient(api_key="test-key")
+        with patch.object(client, "_get_vertex_client", return_value=mock_client):
+            result = await client.advanced_edit(
+                image_path=image_path,
+                prompt="remove the object",
+                edit_mode="inpaint_removal",
+                output_path=output_path,
+                mask_path=mask_path,
+            )
+
+        assert result.success is True
+        assert output_path.exists()
+
+        mock_client.models.edit_image.assert_called_once()
+        kwargs = mock_client.models.edit_image.call_args.kwargs
+        assert kwargs["prompt"] == "remove the object"
+
+        raw_ref, mask_ref = kwargs["reference_images"]
+        assert isinstance(raw_ref, types.RawReferenceImage)
+        assert raw_ref.reference_id == 0
+        assert isinstance(raw_ref.reference_image, types.Image)
+        assert raw_ref.reference_image.image_bytes == raw_bytes
+
+        assert isinstance(mask_ref, types.MaskReferenceImage)
+        assert mask_ref.reference_id == 1
+        assert isinstance(mask_ref.reference_image, types.Image)
+        assert mask_ref.reference_image.image_bytes == mask_bytes
+        assert mask_ref.config is not None
+        assert (
+            mask_ref.config.mask_mode == types.MaskReferenceMode.MASK_MODE_USER_PROVIDED
+        )
+
+        config = kwargs["config"]
+        assert isinstance(config.edit_mode, types.EditMode)
+        assert config.edit_mode == types.EditMode.EDIT_MODE_INPAINT_REMOVAL
+
+    @pytest.mark.asyncio
+    async def test_advanced_edit_without_mask_sends_only_raw_image(self, tmp_path):
+        """Edits without a mask send a single raw reference image."""
+        image_path = tmp_path / "input.png"
+        self._write_png(image_path, "red")
+        result_bytes = self._write_png(tmp_path / "result.png", "green")
+        mock_client = self._vertex_client_returning_image(result_bytes)
+
+        client = ImagenAPIClient(api_key="test-key")
+        with patch.object(client, "_get_vertex_client", return_value=mock_client):
+            result = await client.advanced_edit(
+                image_path=image_path,
+                prompt="swap the background",
+                edit_mode="background_swap",
+                output_path=tmp_path / "edited.png",
+            )
+
+        assert result.success is True
+        kwargs = mock_client.models.edit_image.call_args.kwargs
+        assert len(kwargs["reference_images"]) == 1
+        assert isinstance(kwargs["reference_images"][0], types.RawReferenceImage)
+        assert kwargs["config"].edit_mode == types.EditMode.EDIT_MODE_BGSWAP
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "mode,expected",
+        [
+            ("inpaint_removal", types.EditMode.EDIT_MODE_INPAINT_REMOVAL),
+            ("inpaint_insertion", types.EditMode.EDIT_MODE_INPAINT_INSERTION),
+            ("outpaint", types.EditMode.EDIT_MODE_OUTPAINT),
+            ("background_swap", types.EditMode.EDIT_MODE_BGSWAP),
+            ("style_transfer", types.EditMode.EDIT_MODE_STYLE),
+            ("product_image", types.EditMode.EDIT_MODE_PRODUCT_IMAGE),
+        ],
+    )
+    async def test_advanced_edit_maps_modes_to_sdk_enum(self, tmp_path, mode, expected):
+        """Every user-facing edit mode maps to an SDK EditMode member."""
+        image_path = tmp_path / "input.png"
+        self._write_png(image_path, "red")
+        result_bytes = self._write_png(tmp_path / "result.png", "green")
+        mock_client = self._vertex_client_returning_image(result_bytes)
+
+        client = ImagenAPIClient(api_key="test-key")
+        with patch.object(client, "_get_vertex_client", return_value=mock_client):
+            result = await client.advanced_edit(
+                image_path=image_path,
+                prompt="edit",
+                edit_mode=mode,
+                output_path=tmp_path / "edited.png",
+            )
+
+        assert result.success is True
+        config = mock_client.models.edit_image.call_args.kwargs["config"]
+        assert config.edit_mode == expected
+
+    @pytest.mark.asyncio
+    async def test_advanced_edit_unknown_mode_fails_without_api_call(self, tmp_path):
+        """An unknown edit mode returns a failed result and skips the API."""
+        image_path = tmp_path / "input.png"
+        self._write_png(image_path, "red")
+        mock_client = Mock()
+
+        client = ImagenAPIClient(api_key="test-key")
+        with patch.object(client, "_get_vertex_client", return_value=mock_client):
+            result = await client.advanced_edit(
+                image_path=image_path,
+                prompt="edit",
+                edit_mode="not_a_mode",
+                output_path=tmp_path / "edited.png",
+            )
+
+        assert result.success is False
+        assert result.error == "Unknown edit mode: not_a_mode"
+        mock_client.models.edit_image.assert_not_called()
