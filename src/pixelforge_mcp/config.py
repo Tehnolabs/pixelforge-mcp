@@ -2,7 +2,7 @@
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import yaml
 from pydantic import BaseModel, Field, SecretStr, field_validator
@@ -100,7 +100,7 @@ class Config(BaseModel):
             config_path = Path("config/config.yaml")
 
         # Load from file if exists
-        config_data = {}
+        config_data: Dict[str, Any] = {}
         if config_path.exists():
             with open(config_path) as f:
                 config_data = yaml.safe_load(f) or {}

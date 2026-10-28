@@ -145,7 +145,7 @@ class ImagenAPIClient:
     @staticmethod
     def _build_safety_settings(
         safety_setting: Optional[str],
-    ) -> Optional[list]:
+    ) -> Optional[List["types.SafetySetting"]]:
         """Convert preset string to SDK SafetySetting objects."""
         if not safety_setting or not safety_setting.startswith("preset:"):
             return None
@@ -205,7 +205,7 @@ class ImagenAPIClient:
     def _embed_metadata(
         image_path: Path,
         output_format: str,
-        metadata: dict,
+        metadata: Dict[str, Any],
     ) -> None:
         """Embed generation metadata into the saved image."""
         try:

@@ -4,7 +4,7 @@ import asyncio
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastmcp import FastMCP
 from pydantic import ValidationError
@@ -83,7 +83,7 @@ def generate_output_path(
 def format_image_result(
     result: GenerationResult,
     output_paths: list[Path],
-) -> dict:
+) -> Dict[str, Any]:
     """Format image generation/edit result for MCP response."""
     if not result.success:
         return {
@@ -101,7 +101,7 @@ def format_image_result(
                 }
             )
 
-    response: dict = {
+    response: Dict[str, Any] = {
         "success": True,
         "message": result.output,
         "images": images,
@@ -133,7 +133,7 @@ async def generate_image(
     person_generation: Optional[str] = None,
     reference_images: Optional[List[str]] = None,
     thinking_budget: Optional[int] = None,
-) -> dict:
+) -> Dict[str, Any]:
     """Generate an image from a text prompt using Google Gemini.
 
     Args:
@@ -199,6 +199,8 @@ async def generate_image(
         )
 
         # Resolve quality preset
+        resolved_model: Optional[str]
+        resolved_image_size: Optional[str]
         if inputs.quality:
             preset = QUALITY_PRESETS[inputs.quality]
             resolved_model = preset["model"]
@@ -254,7 +256,7 @@ async def generate_image(
         errors: list[str] = []
         results: list[GenerationResult] = []
         for i, result in enumerate(raw_results):
-            if isinstance(result, Exception):
+            if isinstance(result, BaseException):
                 errors.append(str(result))
                 results.append(
                     GenerationResult(success=False, output="", error=str(result))
@@ -316,7 +318,7 @@ async def edit_image(
     temperature: float = 0.7,
     model: Optional[str] = None,
     output_format: str = "png",
-) -> dict:
+) -> Dict[str, Any]:
     """Edit an existing image using a text prompt.
 
     Args:
@@ -401,7 +403,7 @@ async def remove_background(
     image_path: str,
     output_filename: Optional[str] = None,
     output_format: str = "png",
-) -> dict:
+) -> Dict[str, Any]:
     """Remove the background from an image.
 
     Uses AI to isolate the main subject and remove the background.
@@ -485,7 +487,7 @@ async def transform_image(
     text: Optional[str] = None,
     position: str = "bottom-right",
     opacity: float = 0.5,
-) -> dict:
+) -> Dict[str, Any]:
     """Transform an image using Pillow operations.
 
     Args:
@@ -534,7 +536,7 @@ async def transform_image(
 
         from pixelforge_mcp.utils import transforms
 
-        img = PILImage.open(inputs.image_path)
+        img: PILImage.Image = PILImage.open(inputs.image_path)
 
         # Dispatch to the correct transform function
         op = inputs.operation
@@ -634,7 +636,7 @@ async def upscale_image(
     upscale_factor: str = "x2",
     output_filename: Optional[str] = None,
     output_format: str = "png",
-) -> dict:
+) -> Dict[str, Any]:
     """Upscale an image to higher resolution (requires Vertex AI).
 
     This feature requires Google Cloud Vertex AI credentials.
@@ -707,7 +709,7 @@ async def advanced_edit(
     mask_path: Optional[str] = None,
     output_filename: Optional[str] = None,
     output_format: str = "png",
-) -> dict:
+) -> Dict[str, Any]:
     """Advanced image editing with specialized modes (requires Vertex AI).
 
     This feature requires Google Cloud Vertex AI credentials.
@@ -789,7 +791,7 @@ async def analyze_image(
     image_path: str,
     prompt: Optional[str] = None,
     use_grounding: bool = False,
-) -> dict:
+) -> Dict[str, Any]:
     """Analyze an image and get a detailed description.
 
     Args:
@@ -849,7 +851,7 @@ async def analyze_image(
 async def extract_text(
     image_path: str,
     use_grounding: bool = False,
-) -> dict:
+) -> Dict[str, Any]:
     """Extract text from an image using OCR.
 
     Uses Gemini's vision capabilities for high-quality text extraction.
@@ -905,7 +907,7 @@ async def detect_objects(
     image_path: str,
     objects: Optional[str] = None,
     use_grounding: bool = False,
-) -> dict:
+) -> Dict[str, Any]:
     """Detect objects in an image with bounding boxes.
 
     Uses Gemini's zero-shot object detection. Returns bounding box
@@ -972,7 +974,7 @@ async def compare_images(
     image_paths: List[str],
     prompt: Optional[str] = None,
     use_grounding: bool = False,
-) -> dict:
+) -> Dict[str, Any]:
     """Compare two or more images and analyze differences.
 
     Useful for A/B testing, design review, before/after comparison,
@@ -1047,7 +1049,7 @@ async def compare_images(
 
 
 @mcp.tool()
-async def optimize_prompt(prompt: str, style: Optional[str] = None) -> dict:
+async def optimize_prompt(prompt: str, style: Optional[str] = None) -> Dict[str, Any]:
     """Enhance a basic prompt for dramatically better image results.
 
     Uses AI to add details about lighting, composition, colors,
@@ -1106,7 +1108,7 @@ async def optimize_prompt(prompt: str, style: Optional[str] = None) -> dict:
 @mcp.tool()
 async def list_templates(
     category: Optional[str] = None,
-) -> dict:
+) -> Dict[str, Any]:
     """List available prompt templates for image generation.
 
     Args:
@@ -1145,7 +1147,7 @@ async def list_templates(
 async def apply_template(
     template_name: str,
     subject: str,
-) -> dict:
+) -> Dict[str, Any]:
     """Apply a prompt template with a subject to generate a ready-to-use prompt.
 
     Args:
@@ -1202,7 +1204,7 @@ async def estimate_cost(
     operation: str,
     model: Optional[str] = None,
     number_of_images: int = 1,
-) -> dict:
+) -> Dict[str, Any]:
     """Estimate the cost of an image operation.
 
     Shows pricing per model per operation to help with budgeting.
@@ -1288,7 +1290,7 @@ async def list_history(
     limit: int = 20,
     offset: int = 0,
     tool_filter: Optional[str] = None,
-) -> dict:
+) -> Dict[str, Any]:
     """List recent generation history.
 
     Args:
@@ -1319,7 +1321,7 @@ async def list_history(
 @mcp.tool()
 async def get_generation_details(
     generation_id: str,
-) -> dict:
+) -> Dict[str, Any]:
     """Get details of a specific generation by ID.
 
     Args:
@@ -1349,7 +1351,7 @@ async def batch_generate(
     aspect_ratio: str = "1:1",
     output_format: str = "png",
     quality: Optional[str] = None,
-) -> dict:
+) -> Dict[str, Any]:
     """Generate multiple images in parallel from a list of prompts.
 
     Args:
@@ -1384,7 +1386,7 @@ async def batch_generate(
 
     client = get_api_client()
 
-    async def _gen_one(i: int, prompt: str):
+    async def _gen_one(i: int, prompt: str) -> Dict[str, Any]:
         path = generate_output_path(
             prefix=f"batch_{i + 1}",
             output_format=output_format,
@@ -1411,9 +1413,9 @@ async def batch_generate(
     )
 
     # Handle exceptions
-    processed = []
+    processed: List[Dict[str, Any]] = []
     for i, r in enumerate(results):
-        if isinstance(r, Exception):
+        if isinstance(r, BaseException):
             processed.append(
                 {
                     "index": i,
@@ -1443,7 +1445,7 @@ async def batch_generate(
 
 
 @mcp.tool()
-async def list_available_models() -> dict:
+async def list_available_models() -> Dict[str, Any]:
     """List all available image generation models with capabilities.
 
     Returns model details including speed, quality, resolution
@@ -1505,7 +1507,7 @@ async def list_available_models() -> dict:
 
 
 @mcp.tool()
-def get_server_info() -> dict:
+def get_server_info() -> Dict[str, Any]:
     """Get MCP server configuration, capabilities, and available tools.
 
     Returns:
@@ -1583,7 +1585,7 @@ def get_server_info() -> dict:
     }
 
 
-def main():
+def main() -> None:
     """Main entry point for the MCP server."""
     try:
         config = get_config()
