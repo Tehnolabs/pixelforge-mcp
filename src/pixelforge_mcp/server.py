@@ -1,4 +1,4 @@
-"""Main MCP server implementation for Gemini Imagen."""
+"""Main MCP server implementation for PixelForge."""
 
 import asyncio
 import logging

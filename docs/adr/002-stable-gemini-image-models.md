@@ -31,7 +31,7 @@ Imagen pricing no longer appears on the Gemini API pricing page, and the image g
 
 ### 1. Ship the four stable models; make `gemini-nano-banana-2.1` the default
 
-The default model and the `balanced` quality preset move to `gemini-nano-banana-2.1`. `fast` maps to `gemini-3.1-flash-lite-image` at 1K and `quality` to `gemini-3-pro-image` at 2K (same price as 1K on that model). Panoramic ratios auto-route to `gemini-nano-banana-2.1`.
+The default model and the `balanced` quality preset move to `gemini-nano-banana-2.1`. `fast` maps to `gemini-3.1-flash-lite-image` at 1K and `quality` to `gemini-3-pro-image` at 2K (same price as 1K on that model).
 
 ### 2. Keep `gemini-2.5-flash-image` as a deprecated legacy entry
 

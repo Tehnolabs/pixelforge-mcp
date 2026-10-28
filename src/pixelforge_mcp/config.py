@@ -1,4 +1,4 @@
-"""Configuration management for Gemini Imagen MCP Server."""
+"""Configuration management for the PixelForge MCP server."""
 
 import os
 from pathlib import Path
