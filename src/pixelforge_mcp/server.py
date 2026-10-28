@@ -796,6 +796,7 @@ async def advanced_edit(
 async def analyze_image(
     image_path: str,
     prompt: Optional[str] = None,
+    model: Optional[str] = None,
     use_grounding: bool = False,
 ) -> Dict[str, Any]:
     """Analyze an image and get a detailed description.
@@ -803,6 +804,8 @@ async def analyze_image(
     Args:
         image_path: Path to the image to analyze
         prompt: Custom analysis prompt. Default: general description.
+        model: Analysis model override. Default gemini-3.5-flash-lite.
+            Use gemini-3.8-flash for harder OCR or reasoning.
         use_grounding: Enable Google Search grounding for more
             accurate, factual analysis results.
 
@@ -821,13 +824,17 @@ async def analyze_image(
 
     try:
         inputs = AnalyzeImageInput(
-            image_path=image_path, prompt=prompt, use_grounding=use_grounding
+            image_path=image_path,
+            prompt=prompt,
+            model=model,
+            use_grounding=use_grounding,
         )
 
         client = get_api_client()
         result = await client.analyze(
             Path(inputs.image_path),
             prompt=inputs.prompt,
+            model=inputs.model,
             use_grounding=inputs.use_grounding,
         )
 
@@ -856,6 +863,7 @@ async def analyze_image(
 @mcp.tool()
 async def extract_text(
     image_path: str,
+    model: Optional[str] = None,
     use_grounding: bool = False,
 ) -> Dict[str, Any]:
     """Extract text from an image using OCR.
@@ -865,6 +873,8 @@ async def extract_text(
 
     Args:
         image_path: Path to the image to extract text from
+        model: Analysis model override. Default gemini-3.5-flash-lite.
+            Use gemini-3.8-flash for harder OCR.
         use_grounding: Enable Google Search grounding for more
             accurate, factual results.
 
@@ -877,11 +887,14 @@ async def extract_text(
     logger.info(f"Extracting text: {image_path}")
 
     try:
-        inputs = ExtractTextInput(image_path=image_path, use_grounding=use_grounding)
+        inputs = ExtractTextInput(
+            image_path=image_path, model=model, use_grounding=use_grounding
+        )
 
         client = get_api_client()
         result = await client.extract_text(
             Path(inputs.image_path),
+            model=inputs.model,
             use_grounding=inputs.use_grounding,
         )
 
@@ -912,6 +925,7 @@ async def extract_text(
 async def detect_objects(
     image_path: str,
     objects: Optional[str] = None,
+    model: Optional[str] = None,
     use_grounding: bool = False,
 ) -> Dict[str, Any]:
     """Detect objects in an image with bounding boxes.
@@ -924,6 +938,8 @@ async def detect_objects(
         image_path: Path to the image
         objects: Specific objects to detect (e.g. "cats and dogs").
             Default: detect all visible objects.
+        model: Analysis model override. Default gemini-3.5-flash-lite.
+            Use gemini-3.8-flash for harder OCR or reasoning.
         use_grounding: Enable Google Search grounding for more
             accurate, factual results.
 
@@ -942,13 +958,17 @@ async def detect_objects(
 
     try:
         inputs = DetectObjectsInput(
-            image_path=image_path, objects=objects, use_grounding=use_grounding
+            image_path=image_path,
+            objects=objects,
+            model=model,
+            use_grounding=use_grounding,
         )
 
         client = get_api_client()
         result = await client.detect_objects(
             Path(inputs.image_path),
             objects=inputs.objects,
+            model=inputs.model,
             use_grounding=inputs.use_grounding,
         )
 
@@ -979,6 +999,7 @@ async def detect_objects(
 async def compare_images(
     image_paths: List[str],
     prompt: Optional[str] = None,
+    model: Optional[str] = None,
     use_grounding: bool = False,
 ) -> Dict[str, Any]:
     """Compare two or more images and analyze differences.
@@ -990,6 +1011,8 @@ async def compare_images(
         image_paths: Paths to 2+ images to compare
         prompt: Comparison focus (e.g. "color differences").
             Default: general comparison.
+        model: Analysis model override. Default gemini-3.5-flash-lite.
+            Use gemini-3.8-flash for harder OCR or reasoning.
         use_grounding: Enable Google Search grounding for more
             accurate, factual results.
 
@@ -1010,13 +1033,17 @@ async def compare_images(
 
     try:
         inputs = CompareImagesInput(
-            image_paths=image_paths, prompt=prompt, use_grounding=use_grounding
+            image_paths=image_paths,
+            prompt=prompt,
+            model=model,
+            use_grounding=use_grounding,
         )
 
         client = get_api_client()
         result = await client.compare_images(
             [Path(p) for p in inputs.image_paths],
             prompt=inputs.prompt,
+            model=inputs.model,
             use_grounding=inputs.use_grounding,
         )
 
@@ -1055,7 +1082,9 @@ async def compare_images(
 
 
 @mcp.tool()
-async def optimize_prompt(prompt: str, style: Optional[str] = None) -> Dict[str, Any]:
+async def optimize_prompt(
+    prompt: str, style: Optional[str] = None, model: Optional[str] = None
+) -> Dict[str, Any]:
     """Enhance a basic prompt for dramatically better image results.
 
     Uses AI to add details about lighting, composition, colors,
@@ -1068,6 +1097,8 @@ async def optimize_prompt(prompt: str, style: Optional[str] = None) -> Dict[str,
             3d_render, pixel_art, watercolor, oil_painting, sketch,
             anime, cinematic, product_photo, architecture, food,
             fashion, abstract
+        model: Text model override. Default gemini-3.5-flash-lite.
+            Use gemini-3.8-flash for harder OCR or reasoning.
 
     Returns:
         Dictionary with original and enhanced prompts
@@ -1083,10 +1114,12 @@ async def optimize_prompt(prompt: str, style: Optional[str] = None) -> Dict[str,
     logger.info(f"Optimizing prompt: {prompt[:50]}...")
 
     try:
-        inputs = OptimizePromptInput(prompt=prompt, style=style)
+        inputs = OptimizePromptInput(prompt=prompt, style=style, model=model)
 
         client = get_api_client()
-        result = await client.optimize_prompt(prompt=inputs.prompt, style=inputs.style)
+        result = await client.optimize_prompt(
+            prompt=inputs.prompt, style=inputs.style, model=inputs.model
+        )
 
         if result.success and result.data:
             return {
@@ -1478,6 +1511,7 @@ async def list_available_models() -> Dict[str, Any]:
             return {
                 "success": True,
                 "models": result.data.get("models", []),
+                "analysis_models": result.data.get("analysis_models", []),
                 "recommendation": result.data.get("recommendation", ""),
                 "note": (
                     "Each model can be selected per-request "

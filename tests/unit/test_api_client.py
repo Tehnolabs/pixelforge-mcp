@@ -17,6 +17,7 @@ from pixelforge_mcp.utils.api_client import (
     ImagenAPIClient,
 )
 from pixelforge_mcp.utils.validation import (
+    ANALYSIS_MODELS,
     DEPRECATED_MODEL_ALIASES,
     IMAGE_MODELS,
     RETIRED_MODELS,
@@ -445,6 +446,34 @@ class TestImagenAPIClient:
         assert all(not m.get("deprecated") for m in others)
 
     @pytest.mark.asyncio
+    async def test_list_models_includes_analysis_models(self):
+        """Test list_models returns the text analysis models."""
+        client = ImagenAPIClient()
+        result = await client.list_models()
+
+        assert "analysis_models" in result.data
+        analysis = result.data["analysis_models"]
+        assert [m["name"] for m in analysis] == ANALYSIS_MODELS
+        assert [m["name"] for m in analysis] == [
+            "gemini-3.5-flash-lite",
+            "gemini-3.8-flash",
+        ]
+
+        defaults = [m["name"] for m in analysis if m["default"]]
+        assert defaults == ["gemini-3.5-flash-lite"]
+
+        for model in analysis:
+            assert "nickname" in model
+            assert "description" in model
+            assert "best_for" in model
+            assert set(model["pricing_per_1m_tokens"]) == {"input", "output"}
+
+        lite = analysis[0]
+        assert lite["pricing_per_1m_tokens"] == {"input": 0.30, "output": 2.50}
+        strongest = analysis[1]
+        assert strongest["pricing_per_1m_tokens"] == {"input": 0.75, "output": 3.75}
+
+    @pytest.mark.asyncio
     async def test_list_models_recommendation_names_presets(self):
         """Test the recommendation points at the stable models."""
         client = ImagenAPIClient()
@@ -454,6 +483,8 @@ class TestImagenAPIClient:
         assert "gemini-3.1-flash-lite-image" in recommendation
         assert "gemini-nano-banana-2.1" in recommendation
         assert "gemini-3-pro-image" in recommendation
+        assert "gemini-3.5-flash-lite" in recommendation
+        assert "gemini-3.8-flash" in recommendation
         assert "imagen" not in recommendation.lower()
 
     @pytest.mark.asyncio
@@ -674,7 +705,7 @@ class TestConstants:
         """Test text model is defined."""
         from pixelforge_mcp.utils.api_client import TEXT_MODEL
 
-        assert TEXT_MODEL == "gemini-2.5-flash"
+        assert TEXT_MODEL == "gemini-3.5-flash-lite"
 
     def test_safety_presets(self):
         """Test safety presets are defined."""
@@ -1727,6 +1758,108 @@ class TestModelResolution:
         assert result.success is True
         assert result.data["model"] == "gemini-nano-banana-2.1"
         assert "warnings" not in result.data
+
+
+class TestAnalysisModelOverride:
+    """Tests that analysis methods default to TEXT_MODEL and honor overrides."""
+
+    @staticmethod
+    def _text_client(text):
+        mock_part = Mock()
+        mock_part.text = text
+        mock_candidate = Mock()
+        mock_candidate.content.parts = [mock_part]
+        mock_response = Mock(candidates=[mock_candidate])
+        mock_response.prompt_feedback = None
+
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+        return mock_client
+
+    @staticmethod
+    def _image(tmp_path, name="img.png"):
+        path = tmp_path / name
+        Image.new("RGB", (10, 10), color="red").save(str(path))
+        return path
+
+    @pytest.mark.asyncio
+    async def test_analyze_defaults_to_text_model(self, tmp_path):
+        """analyze() calls gemini-3.5-flash-lite by default."""
+        mock_client = self._text_client("a red square")
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
+        result = await client.analyze(self._image(tmp_path))
+
+        assert result.success is True
+        call_kwargs = mock_client.aio.models.generate_content.call_args.kwargs
+        assert call_kwargs["model"] == "gemini-3.5-flash-lite"
+
+    @pytest.mark.asyncio
+    async def test_analyze_honors_model_override(self, tmp_path):
+        """analyze() passes a model override to the SDK."""
+        mock_client = self._text_client("a red square")
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
+        await client.analyze(self._image(tmp_path), model="gemini-3.8-flash")
+
+        call_kwargs = mock_client.aio.models.generate_content.call_args.kwargs
+        assert call_kwargs["model"] == "gemini-3.8-flash"
+
+    @pytest.mark.asyncio
+    async def test_extract_text_defaults_to_text_model(self, tmp_path):
+        """extract_text() calls gemini-3.5-flash-lite by default."""
+        mock_client = self._text_client('{"text": "hi", "blocks": []}')
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
+        await client.extract_text(self._image(tmp_path))
+
+        call_kwargs = mock_client.aio.models.generate_content.call_args.kwargs
+        assert call_kwargs["model"] == "gemini-3.5-flash-lite"
+
+    @pytest.mark.asyncio
+    async def test_detect_objects_honors_model_override(self, tmp_path):
+        """detect_objects() passes a model override to the SDK."""
+        mock_client = self._text_client("[]")
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
+        await client.detect_objects(self._image(tmp_path), model="gemini-3.8-flash")
+
+        call_kwargs = mock_client.aio.models.generate_content.call_args.kwargs
+        assert call_kwargs["model"] == "gemini-3.8-flash"
+
+    @pytest.mark.asyncio
+    async def test_compare_images_honors_model_override(self, tmp_path):
+        """compare_images() passes a model override to the SDK."""
+        mock_client = self._text_client("they differ")
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
+        await client.compare_images(
+            [self._image(tmp_path, "a.png"), self._image(tmp_path, "b.png")],
+            model="gemini-3.8-flash",
+        )
+
+        call_kwargs = mock_client.aio.models.generate_content.call_args.kwargs
+        assert call_kwargs["model"] == "gemini-3.8-flash"
+
+    @pytest.mark.asyncio
+    async def test_optimize_prompt_defaults_and_overrides(self):
+        """optimize_prompt() defaults to the text model and honors overrides."""
+        mock_client = self._text_client("a vivid prompt")
+        client = ImagenAPIClient(api_key="test-key")
+        client._genai_client = mock_client
+
+        await client.optimize_prompt("a cat")
+        default_kwargs = mock_client.aio.models.generate_content.call_args.kwargs
+        assert default_kwargs["model"] == "gemini-3.5-flash-lite"
+
+        await client.optimize_prompt("a cat", model="gemini-3.8-flash")
+        override_kwargs = mock_client.aio.models.generate_content.call_args.kwargs
+        assert override_kwargs["model"] == "gemini-3.8-flash"
 
 
 class TestUpscale:

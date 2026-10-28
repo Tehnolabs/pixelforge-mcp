@@ -22,7 +22,11 @@ from pixelforge_mcp.server import (
     generate_image as _generate_image_tool,
 )
 from pixelforge_mcp.utils.api_client import GenerationResult, ImagenAPIClient
-from pixelforge_mcp.utils.validation import COST_TABLE, IMAGE_MODELS
+from pixelforge_mcp.utils.validation import (
+    ANALYSIS_MODELS,
+    COST_TABLE,
+    IMAGE_MODELS,
+)
 
 # In FastMCP 3.x, @mcp.tool() returns the original function directly.
 estimate_cost_fn = _estimate_cost_tool
@@ -341,6 +345,19 @@ class TestEstimateCost:
         assert result["unit_cost_usd"] == COST_TABLE["gemini-3-pro-image"]["edit"]
 
     @pytest.mark.asyncio
+    async def test_single_model_analyze(self):
+        """Test cost estimate for a single model analyze operation."""
+        result = await estimate_cost_fn(
+            operation="analyze",
+            model="gemini-3.5-flash-lite",
+            number_of_images=1,
+        )
+
+        assert result["success"] is True
+        assert result["operation"] == "analyze"
+        assert result["unit_cost_usd"] == COST_TABLE["gemini-3.5-flash-lite"]["analyze"]
+
+    @pytest.mark.asyncio
     async def test_multiple_images(self):
         """Test cost estimate scales correctly with number_of_images."""
         result = await estimate_cost_fn(
@@ -372,12 +389,25 @@ class TestEstimateCost:
         model_names = [e["model"] for e in estimates]
         for model_name in IMAGE_MODELS:
             assert model_name in model_names
+        for model_name in ANALYSIS_MODELS:
+            assert model_name not in model_names
 
         # Each estimate has the expected fields
         for est in estimates:
             assert "model" in est
             assert "unit_cost_usd" in est
             assert "total_cost_usd" in est
+
+    @pytest.mark.asyncio
+    async def test_all_models_analyze_lists_only_analysis_models(self):
+        """Test analyze estimates cover the text models, not image models."""
+        result = await estimate_cost_fn(operation="analyze", number_of_images=1)
+
+        assert result["success"] is True
+        model_names = [e["model"] for e in result["estimates"]]
+        assert model_names == ANALYSIS_MODELS
+        for est in result["estimates"]:
+            assert est["unit_cost_usd"] > 0
 
     @pytest.mark.asyncio
     async def test_all_models_with_multiple_images(self):
@@ -717,6 +747,122 @@ class TestGenerateImageModelResolution:
 
 
 # ------------------------------------------------------------------
+# Analysis handlers forward the model override
+# ------------------------------------------------------------------
+
+
+ANALYSIS_HANDLER_CASES = [
+    pytest.param(
+        "analyze_image",
+        "analyze",
+        GenerationResult(success=True, output="d", data={"analysis": "d"}),
+        id="analyze_image",
+    ),
+    pytest.param(
+        "extract_text",
+        "extract_text",
+        GenerationResult(
+            success=True, output="t", data={"extracted_text": "t", "blocks": []}
+        ),
+        id="extract_text",
+    ),
+    pytest.param(
+        "detect_objects",
+        "detect_objects",
+        GenerationResult(success=True, output="n", data={"detections": [], "count": 0}),
+        id="detect_objects",
+    ),
+    pytest.param(
+        "compare_images",
+        "compare_images",
+        GenerationResult(success=True, output="c", data={"analysis": "c"}),
+        id="compare_images",
+    ),
+    pytest.param(
+        "optimize_prompt",
+        "optimize_prompt",
+        GenerationResult(
+            success=True,
+            output="better",
+            data={"original_prompt": "a cat", "enhanced_prompt": "better"},
+        ),
+        id="optimize_prompt",
+    ),
+]
+
+
+def _analysis_call_kwargs(handler_name, image_path):
+    """Build handler kwargs: the image argument differs per tool."""
+    if handler_name == "optimize_prompt":
+        return {"prompt": "a cat"}
+    if handler_name == "compare_images":
+        return {"image_paths": [image_path, image_path]}
+    return {"image_path": image_path}
+
+
+class TestAnalysisHandlersForwardModel:
+    """Each analysis tool passes its model argument to the API client."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "handler_name,client_method,client_result", ANALYSIS_HANDLER_CASES
+    )
+    @patch("pixelforge_mcp.server.get_api_client")
+    async def test_model_override_forwarded(
+        self,
+        mock_get_client,
+        handler_name,
+        client_method,
+        client_result,
+        tmp_path,
+    ):
+        """An explicit model reaches the client method as a keyword."""
+        image = tmp_path / "img.png"
+        image.touch()
+        mock_client = Mock()
+        setattr(mock_client, client_method, AsyncMock(return_value=client_result))
+        mock_get_client.return_value = mock_client
+
+        handler = getattr(server_module, handler_name)
+        result = await handler(
+            **_analysis_call_kwargs(handler_name, str(image)),
+            model="gemini-3.8-flash",
+        )
+
+        assert result["success"] is True
+        method = getattr(mock_client, client_method)
+        method.assert_awaited_once()
+        assert method.call_args.kwargs["model"] == "gemini-3.8-flash"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "handler_name,client_method,client_result", ANALYSIS_HANDLER_CASES
+    )
+    @patch("pixelforge_mcp.server.get_api_client")
+    async def test_model_defaults_to_none(
+        self,
+        mock_get_client,
+        handler_name,
+        client_method,
+        client_result,
+        tmp_path,
+    ):
+        """Without a model the client receives None and applies its default."""
+        image = tmp_path / "img.png"
+        image.touch()
+        mock_client = Mock()
+        setattr(mock_client, client_method, AsyncMock(return_value=client_result))
+        mock_get_client.return_value = mock_client
+
+        handler = getattr(server_module, handler_name)
+        result = await handler(**_analysis_call_kwargs(handler_name, str(image)))
+
+        assert result["success"] is True
+        method = getattr(mock_client, client_method)
+        assert method.call_args.kwargs["model"] is None
+
+
+# ------------------------------------------------------------------
 # list_available_models / get_server_info
 # ------------------------------------------------------------------
 
@@ -726,14 +872,15 @@ class TestListAvailableModels:
 
     @pytest.mark.asyncio
     @patch("pixelforge_mcp.server.get_api_client")
-    async def test_returns_image_models_and_recommendation(self, mock_get_client):
-        """The handler passes through the model list and the recommendation."""
+    async def test_returns_image_and_analysis_models(self, mock_get_client):
+        """The handler passes through both model lists and the recommendation."""
         mock_get_client.return_value = ImagenAPIClient(api_key="test-key")
 
         result = await server_module.list_available_models()
 
         assert result["success"] is True
         assert [m["name"] for m in result["models"]] == IMAGE_MODELS
+        assert [m["name"] for m in result["analysis_models"]] == ANALYSIS_MODELS
         assert "gemini-nano-banana-2.1" in result["recommendation"]
 
     @pytest.mark.asyncio

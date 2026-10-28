@@ -6,8 +6,10 @@ import pytest
 from pydantic import ValidationError
 
 from pixelforge_mcp.utils.validation import (
+    ANALYSIS_MODELS,
     ASPECT_RATIOS,
     COST_TABLE,
+    DEFAULT_ANALYSIS_MODEL,
     DEFAULT_MODEL,
     DEPRECATED_MODEL_ALIASES,
     FORMAT_EXTENSIONS,
@@ -691,10 +693,10 @@ class TestConstants:
         assert "cinematic" in PROMPT_STYLES
 
     def test_cost_table_has_all_models(self):
-        """Test cost table covers every image model."""
-        for model_name in IMAGE_MODELS:
+        """Test cost table covers every image and analysis model."""
+        for model_name in IMAGE_MODELS + ANALYSIS_MODELS:
             assert model_name in COST_TABLE, f"{model_name} missing from COST_TABLE"
-        assert set(COST_TABLE) == set(IMAGE_MODELS)
+        assert set(COST_TABLE) == set(IMAGE_MODELS) | set(ANALYSIS_MODELS)
 
     def test_image_models_have_generate_and_edit(self):
         """Test image models price generate and edit, but not analyze."""
@@ -704,6 +706,11 @@ class TestConstants:
             assert "edit" in costs, f"{model_name} missing edit"
             assert "analyze" not in costs, f"{model_name} should not price analyze"
 
+    def test_analysis_models_only_have_analyze(self):
+        """Test analysis models price analyze only."""
+        for model_name in ANALYSIS_MODELS:
+            assert set(COST_TABLE[model_name]) == {"analyze"}, model_name
+
     def test_cost_table_prices(self):
         """Test cost table holds the stable-model 1K prices."""
         assert COST_TABLE["gemini-nano-banana-2.1"]["generate"] == 0.0336
@@ -711,11 +718,15 @@ class TestConstants:
         assert COST_TABLE["gemini-3.1-flash-image"]["generate"] == 0.067
         assert COST_TABLE["gemini-3-pro-image"]["generate"] == 0.134
         assert COST_TABLE["gemini-2.5-flash-image"]["generate"] == 0.039
+        assert COST_TABLE["gemini-3.5-flash-lite"]["analyze"] == 0.001
+        assert COST_TABLE["gemini-3.8-flash"]["analyze"] == 0.004
 
     def test_default_models(self):
-        """Test the default image model is listed."""
+        """Test default image and analysis models are listed."""
         assert DEFAULT_MODEL == "gemini-nano-banana-2.1"
         assert DEFAULT_MODEL in IMAGE_MODELS
+        assert DEFAULT_ANALYSIS_MODEL == "gemini-3.5-flash-lite"
+        assert DEFAULT_ANALYSIS_MODEL in ANALYSIS_MODELS
 
     def test_retired_and_aliased_models_not_listed(self):
         """Test retired and aliased IDs are not offered as models."""
@@ -981,3 +992,55 @@ class TestEstimateCostInput:
         data = EstimateCostInput(operation="generate")
         assert data.model is None
         assert data.number_of_images == 1
+
+
+class TestAnalysisModelOverride:
+    """Tests for the model override on analysis inputs."""
+
+    @staticmethod
+    def _build(input_cls, tmp_path, **extra):
+        img = tmp_path / "img.png"
+        img.touch()
+        if input_cls is OptimizePromptInput:
+            return input_cls(prompt="a cat", **extra)
+        if input_cls is CompareImagesInput:
+            img2 = tmp_path / "img2.png"
+            img2.touch()
+            return input_cls(image_paths=[str(img), str(img2)], **extra)
+        return input_cls(image_path=str(img), **extra)
+
+    @pytest.mark.parametrize(
+        "input_cls",
+        [
+            AnalyzeImageInput,
+            ExtractTextInput,
+            DetectObjectsInput,
+            CompareImagesInput,
+            OptimizePromptInput,
+        ],
+    )
+    def test_model_defaults_to_none(self, input_cls, tmp_path):
+        """Test the analysis model override is optional."""
+        data = self._build(input_cls, tmp_path)
+        assert data.model is None
+
+    @pytest.mark.parametrize(
+        "input_cls",
+        [
+            AnalyzeImageInput,
+            ExtractTextInput,
+            DetectObjectsInput,
+            CompareImagesInput,
+            OptimizePromptInput,
+        ],
+    )
+    @pytest.mark.parametrize("model_name", ANALYSIS_MODELS)
+    def test_model_override_accepted(self, input_cls, model_name, tmp_path):
+        """Test every analysis model is accepted as an override."""
+        data = self._build(input_cls, tmp_path, model=model_name)
+        assert data.model == model_name
+
+    def test_model_field_documents_default(self):
+        """Test the field description names the default analysis model."""
+        description = AnalyzeImageInput.model_fields["model"].description
+        assert DEFAULT_ANALYSIS_MODEL in description

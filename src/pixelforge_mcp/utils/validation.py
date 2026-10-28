@@ -69,7 +69,14 @@ IMAGE_MODELS: List[str] = [
     "gemini-2.5-flash-image",  # deprecated legacy
 ]
 
+# Text models used by the analysis tools
+ANALYSIS_MODELS: List[str] = [
+    "gemini-3.5-flash-lite",
+    "gemini-3.8-flash",
+]
+
 DEFAULT_MODEL = "gemini-nano-banana-2.1"
+DEFAULT_ANALYSIS_MODEL = "gemini-3.5-flash-lite"
 
 # Preview IDs Google shut down on 2026-06-25, mapped to the stable
 # replacements named on the Gemini API deprecations page.
@@ -87,6 +94,7 @@ RETIRED_MODELS: Dict[str, str] = {
 
 # Cost per operation per model (USD).
 # Image models: price per image at 1K for generate/edit.
+# Analysis models: per-call estimate for a single image plus a short prompt.
 COST_TABLE = {
     "gemini-nano-banana-2.1": {
         "generate": 0.0336,
@@ -107,6 +115,12 @@ COST_TABLE = {
     "gemini-2.5-flash-image": {
         "generate": 0.039,
         "edit": 0.039,
+    },
+    "gemini-3.5-flash-lite": {
+        "analyze": 0.001,
+    },
+    "gemini-3.8-flash": {
+        "analyze": 0.004,
     },
 }
 
@@ -401,6 +415,12 @@ class AnalyzeImageInput(BaseModel):
         None,
         description="Custom analysis prompt (default: general description)",
     )
+    model: Optional[str] = Field(
+        None,
+        description="Analysis model override. "
+        f"Default {DEFAULT_ANALYSIS_MODEL}. "
+        "Use gemini-3.8-flash for harder OCR or reasoning.",
+    )
     use_grounding: bool = Field(
         False,
         description="Enable Google Search grounding for more accurate, "
@@ -422,6 +442,12 @@ class ExtractTextInput(BaseModel):
     """Input validation for OCR / text extraction."""
 
     image_path: str = Field(..., description="Path to the image to extract text from")
+    model: Optional[str] = Field(
+        None,
+        description="Analysis model override. "
+        f"Default {DEFAULT_ANALYSIS_MODEL}. "
+        "Use gemini-3.8-flash for harder OCR or reasoning.",
+    )
     use_grounding: bool = Field(
         False,
         description="Enable Google Search grounding for more accurate, "
@@ -442,6 +468,12 @@ class DetectObjectsInput(BaseModel):
         None,
         description="Specific objects to detect (e.g. 'cats and dogs'). "
         "If not provided, detects all visible objects.",
+    )
+    model: Optional[str] = Field(
+        None,
+        description="Analysis model override. "
+        f"Default {DEFAULT_ANALYSIS_MODEL}. "
+        "Use gemini-3.8-flash for harder OCR or reasoning.",
     )
     use_grounding: bool = Field(
         False,
@@ -465,6 +497,12 @@ class CompareImagesInput(BaseModel):
         None,
         description="Comparison focus (e.g. 'color differences', "
         "'layout changes'). Default: general comparison.",
+    )
+    model: Optional[str] = Field(
+        None,
+        description="Analysis model override. "
+        f"Default {DEFAULT_ANALYSIS_MODEL}. "
+        "Use gemini-3.8-flash for harder OCR or reasoning.",
     )
     use_grounding: bool = Field(
         False,
@@ -607,6 +645,12 @@ class OptimizePromptInput(BaseModel):
         "3d_render, pixel_art, watercolor, oil_painting, sketch, "
         "anime, cinematic, product_photo, architecture, food, "
         "fashion, abstract",
+    )
+    model: Optional[str] = Field(
+        None,
+        description="Analysis model override. "
+        f"Default {DEFAULT_ANALYSIS_MODEL}. "
+        "Use gemini-3.8-flash for harder OCR or reasoning.",
     )
 
     @field_validator("prompt")

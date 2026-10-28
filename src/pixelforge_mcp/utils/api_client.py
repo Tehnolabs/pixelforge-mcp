@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from PIL import Image
 
 from .validation import (
+    DEFAULT_ANALYSIS_MODEL,
     DEFAULT_MODEL,
     DEPRECATED_MODEL_ALIASES,
     RETIRED_MODELS,
@@ -85,8 +86,8 @@ PILLOW_FORMAT_MAP = {
     "webp": "WEBP",
 }
 
-# Text-only model for prompt optimization (not image model)
-TEXT_MODEL = "gemini-2.5-flash"
+# Default text model for analysis and prompt optimization (not an image model)
+TEXT_MODEL = DEFAULT_ANALYSIS_MODEL
 
 
 @dataclass
@@ -1229,15 +1230,45 @@ class ImagenAPIClient:
             },
         ]
 
+        analysis_models: List[Dict[str, Any]] = [
+            {
+                "name": "gemini-3.5-flash-lite",
+                "nickname": "Gemini 3.5 Flash-Lite",
+                "default": True,
+                "description": "Default for analyze_image, extract_text, "
+                "detect_objects, compare_images, and optimize_prompt.",
+                "best_for": [
+                    "Everyday image description and prompt optimization",
+                    "Low-cost, low-latency analysis",
+                ],
+                "pricing_per_1m_tokens": {"input": 0.30, "output": 2.50},
+            },
+            {
+                "name": "gemini-3.8-flash",
+                "nickname": "Gemini 3.8 Flash",
+                "default": False,
+                "description": "Strongest analysis model. Pass "
+                "model='gemini-3.8-flash' to an analysis tool.",
+                "best_for": [
+                    "Hardest OCR and reasoning over images",
+                    "Precise object detection",
+                ],
+                "pricing_per_1m_tokens": {"input": 0.75, "output": 3.75},
+            },
+        ]
+
         return GenerationResult(
             success=True,
             output=f"Found {len(models)} available models",
             data={
                 "models": models,
+                "analysis_models": analysis_models,
                 "recommendation": (
                     "Use quality presets: fast (gemini-3.1-flash-lite-image), "
                     "balanced (gemini-nano-banana-2.1, default), "
-                    "quality (gemini-3-pro-image)."
+                    "quality (gemini-3-pro-image). "
+                    "Analysis tools default to gemini-3.5-flash-lite; pass "
+                    "model='gemini-3.8-flash' for harder OCR or reasoning."
                 ),
             },
         )
