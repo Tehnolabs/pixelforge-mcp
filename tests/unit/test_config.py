@@ -76,7 +76,7 @@ class TestServerConfig:
         """Test ServerConfig uses correct defaults."""
         config = ServerConfig()
         assert config.name == "pixelforge-mcp"
-        assert config.version == "0.5.4"
+        assert config.version == "0.6.0"
         assert config.log_level == "INFO"
 
 
@@ -164,7 +164,7 @@ class TestConfig:
                 default_temperature=0.8,
             ),
             server=ServerConfig(
-                name="pixelforge-mcp", version="0.5.4", log_level="DEBUG"
+                name="pixelforge-mcp", version="0.6.0", log_level="DEBUG"
             ),
         )
 
