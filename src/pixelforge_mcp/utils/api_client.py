@@ -993,12 +993,13 @@ class ImagenAPIClient:
             from google.genai import types
 
             client = self._get_vertex_client()
-            img = Image.open(str(image_path))
 
+            # The SDK expects types.Image; a PIL image is coerced to one with
+            # no bytes, which sends an empty image to the API.
             response = await asyncio.to_thread(
                 client.models.upscale_image,
                 model="imagen-4.0-upscale-preview",
-                image=img,
+                image=types.Image.from_file(location=str(image_path)),
                 upscale_factor=upscale_factor,
                 config=types.UpscaleImageConfig(
                     output_mime_type="image/png",

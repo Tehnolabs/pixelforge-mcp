@@ -1471,3 +1471,65 @@ class TestAdvancedEdit:
         assert result.success is False
         assert result.error == "Unknown edit mode: not_a_mode"
         mock_client.models.edit_image.assert_not_called()
+
+
+class TestUpscale:
+    """Tests for upscale via the Vertex AI upscale_image API."""
+
+    @pytest.mark.asyncio
+    async def test_upscale_sends_sdk_image_with_file_bytes(self, tmp_path):
+        """The request image is a types.Image carrying the file's bytes."""
+        image_path = tmp_path / "input.png"
+        buf = io.BytesIO()
+        Image.new("RGB", (10, 10), color="red").save(buf, format="PNG")
+        image_path.write_bytes(buf.getvalue())
+
+        result_buf = io.BytesIO()
+        Image.new("RGB", (20, 20), color="green").save(result_buf, format="PNG")
+        mock_generated = Mock()
+        mock_generated.image = Mock(image_bytes=result_buf.getvalue())
+        mock_response = Mock()
+        mock_response.generated_images = [mock_generated]
+        mock_client = Mock()
+        mock_client.models.upscale_image = Mock(return_value=mock_response)
+
+        output_path = tmp_path / "upscaled.png"
+        client = ImagenAPIClient(api_key="test-key")
+        with patch.object(client, "_get_vertex_client", return_value=mock_client):
+            result = await client.upscale(
+                image_path=image_path,
+                output_path=output_path,
+                upscale_factor="x2",
+            )
+
+        assert result.success is True
+        assert output_path.exists()
+
+        mock_client.models.upscale_image.assert_called_once()
+        kwargs = mock_client.models.upscale_image.call_args.kwargs
+        assert isinstance(kwargs["image"], types.Image)
+        assert kwargs["image"].image_bytes == image_path.read_bytes()
+        assert kwargs["upscale_factor"] == "x2"
+        assert isinstance(kwargs["config"], types.UpscaleImageConfig)
+
+    @pytest.mark.asyncio
+    async def test_upscale_no_output_fails(self, tmp_path):
+        """An empty response returns a failed result."""
+        image_path = tmp_path / "input.png"
+        Image.new("RGB", (10, 10), color="red").save(str(image_path))
+
+        mock_response = Mock()
+        mock_response.generated_images = []
+        mock_client = Mock()
+        mock_client.models.upscale_image = Mock(return_value=mock_response)
+
+        client = ImagenAPIClient(api_key="test-key")
+        with patch.object(client, "_get_vertex_client", return_value=mock_client):
+            result = await client.upscale(
+                image_path=image_path,
+                output_path=tmp_path / "upscaled.png",
+                upscale_factor="x4",
+            )
+
+        assert result.success is False
+        assert result.error == "Upscaling produced no output"
