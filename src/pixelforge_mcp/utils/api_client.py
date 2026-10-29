@@ -1,28 +1,110 @@
 """API client for Google Gemini image generation via google-genai SDK."""
 
-import asyncio
 import json
 import logging
+import math
 import os
 from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
+
+from pixelforge_mcp.config import prefer_vertex_from_env
 
 from .validation import (
     DEFAULT_ANALYSIS_MODEL,
     DEFAULT_MODEL,
     DEPRECATED_MODEL_ALIASES,
+    IMAGE_SIZE_PIXELS,
     RETIRED_MODELS,
+    SDK_IMAGE_SIZE_VALUES,
+    UPSCALE_FACTORS,
+    supported_aspect_ratios,
+    supported_image_sizes,
 )
 
 if TYPE_CHECKING:
     from google.genai import types
 
 logger = logging.getLogger(__name__)
+
+# Backends. The Gemini API is selected by an API key; Vertex AI by a
+# Google Cloud project with Application Default Credentials.
+BACKEND_GEMINI_API = "gemini_api"
+BACKEND_VERTEX_AI = "vertex_ai"
+
+# The current Gemini image and text models are served from this Vertex AI
+# location. Regional endpoints return 404 for them.
+DEFAULT_VERTEX_LOCATION = "global"
+
+# Retry policy for transient API errors. google-genai only retries when
+# retry options are set; image models on a fresh project return 429 on
+# short bursts.
+RETRY_ATTEMPTS = 5
+RETRY_INITIAL_DELAY = 2.0
+RETRY_MAX_DELAY = 60.0
+RETRY_STATUS_CODES = [408, 429, 500, 502, 503, 504]
+
+# A chosen aspect ratio within this factor of the source shape needs no warning.
+ASPECT_RATIO_TOLERANCE = 1.05
+
+UPSCALE_INSTRUCTION = (
+    "Upscale this image to a higher resolution. Reproduce it exactly: the "
+    "same composition, subjects, colors, lighting, text, and framing. Only "
+    "add fine detail and sharpness. Do not add, remove, move, or restyle "
+    "anything."
+)
+
+MASK_INSTRUCTION = (
+    "The second image is a mask for the first image: white areas mark the "
+    "region to change, black areas must stay exactly as they are."
+)
+
+# Mode-specific instructions for advanced_edit. {prompt} is the user's text.
+EDIT_MODE_INSTRUCTIONS: Dict[str, str] = {
+    "inpaint_removal": (
+        "Remove the following from the image: {prompt}. Fill the vacated "
+        "area so it blends seamlessly with the surroundings. Keep "
+        "everything else exactly as it is."
+    ),
+    "inpaint_insertion": (
+        "Add the following to the image: {prompt}. Integrate it naturally "
+        "with matching lighting, perspective, scale, and shadows. Keep "
+        "everything else exactly as it is."
+    ),
+    "outpaint": (
+        "Extend the image beyond its current borders, continuing the scene "
+        "naturally and consistently. {prompt}. Keep the original content "
+        "unchanged in the center."
+    ),
+    "background_swap": (
+        "Replace the background with: {prompt}. Keep the main subject "
+        "exactly as it is, with clean edges and lighting that matches the "
+        "new background."
+    ),
+    "style_transfer": (
+        "Re-render the image in this style: {prompt}. Preserve the "
+        "composition, subjects, and layout."
+    ),
+    "product_image": (
+        "Create a professional product photograph of the main subject: "
+        "{prompt}. Keep the product's shape, colors, labels, and "
+        "proportions exactly as shown."
+    ),
+}
+
+GENERATIVE_UPSCALE_WARNING = (
+    "Generative upscale re-renders the image with a Gemini image model, so "
+    "fine details can differ from the source. For exact pixel scaling use "
+    "transform_image(operation='resize')."
+)
+
+MASK_GUIDANCE_WARNING = (
+    "The mask guides the model semantically; the edited region is not " "pixel-exact."
+)
 
 DEFAULT_ANALYSIS_PROMPT = (
     "Describe this image in detail, including objects, "
@@ -106,7 +188,9 @@ class ImagenAPIClient:
     """Client for image generation via google-genai SDK.
 
     All methods use the google-genai SDK directly via generate_content
-    (Gemini image and text models).
+    (Gemini image and text models). Requests go to the Gemini API with an
+    API key, or to Vertex AI with a Google Cloud project and Application
+    Default Credentials.
     """
 
     def __init__(
@@ -114,28 +198,90 @@ class ImagenAPIClient:
         model_name: str = DEFAULT_MODEL,
         api_key: Optional[str] = None,
         log_images: bool = False,
+        backend: Optional[str] = None,
+        project_id: Optional[str] = None,
+        location: Optional[str] = None,
     ):
         self.model_name = model_name
         self.api_key = api_key
         self.log_images = log_images
+        self.project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT")
+        self.location = (
+            location or os.getenv("GOOGLE_CLOUD_LOCATION") or DEFAULT_VERTEX_LOCATION
+        )
+        self.backend = backend or self._detect_backend()
         self._genai_client: Optional[Any] = None
 
+    def _resolved_api_key(self) -> Optional[str]:
+        return (
+            self.api_key
+            or os.getenv("GOOGLE_API_KEY")
+            or os.getenv("GOOGLE_GENERATIVE_AI_API_KEY")
+            or os.getenv("GEMINI_API_KEY")
+        )
+
+    def _detect_backend(self) -> str:
+        """Pick the backend from the project, the API key, and SDK switches.
+
+        Vertex AI needs a project. It is chosen when no API key is set, or
+        when GOOGLE_GENAI_USE_VERTEXAI / GOOGLE_GENAI_USE_ENTERPRISE is on.
+        """
+        if self.project_id and (
+            prefer_vertex_from_env() or not self._resolved_api_key()
+        ):
+            return BACKEND_VERTEX_AI
+        return BACKEND_GEMINI_API
+
+    @staticmethod
+    def _http_options() -> Any:
+        """Retry transient errors (rate limits, 5xx) with backoff."""
+        from google.genai import types
+
+        return types.HttpOptions(
+            retry_options=types.HttpRetryOptions(
+                attempts=RETRY_ATTEMPTS,
+                initial_delay=RETRY_INITIAL_DELAY,
+                max_delay=RETRY_MAX_DELAY,
+                exp_base=2.0,
+                jitter=1.0,
+                http_status_codes=RETRY_STATUS_CODES,
+            )
+        )
+
     def _get_genai_client(self) -> Any:
-        """Get or create direct google-genai client."""
+        """Get or create the google-genai client for the active backend."""
         if self._genai_client is None:
             from google import genai
 
-            api_key = (
-                self.api_key
-                or os.getenv("GOOGLE_API_KEY")
-                or os.getenv("GOOGLE_GENERATIVE_AI_API_KEY")
-                or os.getenv("GEMINI_API_KEY")
-            )
-            if not api_key:
-                raise ValueError(
-                    "No API key found. " "Set GOOGLE_API_KEY environment variable."
+            if self.backend == BACKEND_VERTEX_AI:
+                if not self.project_id:
+                    raise ValueError(
+                        "Vertex AI backend selected but no project is "
+                        "configured. Set GOOGLE_CLOUD_PROJECT, and "
+                        "GOOGLE_APPLICATION_CREDENTIALS for a service account."
+                    )
+                self._genai_client = genai.Client(
+                    vertexai=True,
+                    project=self.project_id,
+                    location=self.location,
+                    http_options=self._http_options(),
                 )
-            self._genai_client = genai.Client(api_key=api_key)
+            else:
+                api_key = self._resolved_api_key()
+                if not api_key:
+                    raise ValueError(
+                        "No credentials found. Set GOOGLE_API_KEY for the "
+                        "Gemini API, or GOOGLE_CLOUD_PROJECT with Application "
+                        "Default Credentials for Vertex AI."
+                    )
+                # vertexai=False pins the Gemini API. Left unset, the SDK
+                # reads GOOGLE_GENAI_USE_VERTEXAI / GOOGLE_GENAI_USE_ENTERPRISE
+                # and would send the API key to Vertex AI instead.
+                self._genai_client = genai.Client(
+                    vertexai=False,
+                    api_key=api_key,
+                    http_options=self._http_options(),
+                )
         return self._genai_client
 
     # ------------------------------------------------------------------
@@ -222,15 +368,150 @@ class ImagenAPIClient:
 
     @staticmethod
     def _classify_error(e: Exception) -> str:
-        """Return a user-friendly error message for common API errors."""
-        error_type = type(e).__name__
-        if error_type == "ResourceExhausted":
-            return "Rate limit exceeded. Please wait and retry."
-        elif error_type == "PermissionDenied":
-            return "API access denied. Check your API key."
-        elif error_type == "InvalidArgument":
-            return f"Invalid request: {e}"
-        return str(e)
+        """Return a user-friendly error message for common API errors.
+
+        google-genai raises ClientError/ServerError carrying ``code`` (HTTP
+        status), ``status`` (API status name) and ``message`` (the API's
+        own text); plain exceptions are matched on their text. The original
+        text is kept so a quota or permission problem stays visible.
+        """
+        code = getattr(e, "code", None)
+        status = str(getattr(e, "status", None) or "")
+        detail = str(getattr(e, "message", None) or e).strip()
+        lower = f"{status} {detail}".lower()
+
+        if code == 429 or "resource_exhausted" in lower:
+            return (
+                f"Rate limit exceeded after {RETRY_ATTEMPTS} attempts "
+                f"({status or 'RESOURCE_EXHAUSTED'}): {detail[:300]} If this "
+                "persists or the quota limit is 0, the project needs a quota "
+                "increase; retrying will not help."
+            )
+        if code == 403 or "permission_denied" in lower:
+            return (
+                f"Permission denied ({status or 'PERMISSION_DENIED'}): "
+                f"{detail[:300]} On Vertex AI, enable the Vertex AI API on the "
+                "project and grant the identity roles/aiplatform.user. With an "
+                "API key, check the key and that the Generative Language API "
+                "is enabled."
+            )
+        if "publisher model" in lower and "not found" in lower:
+            if "/locations/global/" in lower:
+                return (
+                    f"{detail} The model ID is unknown or retired on Vertex AI "
+                    "(call list_available_models for current IDs), or the "
+                    "project cannot access it yet."
+                )
+            return (
+                f"{detail} The current Gemini image and text models are served "
+                "from the 'global' Vertex AI location; set "
+                "GOOGLE_CLOUD_LOCATION=global."
+            )
+        if "api key not valid" in lower or "api_key_invalid" in lower:
+            return f"Invalid API key: {detail[:300]}"
+        if code == 400 or "invalid_argument" in lower:
+            return f"Invalid request ({status or 'INVALID_ARGUMENT'}): {detail[:300]}"
+        if code:
+            prefix = " ".join(str(part) for part in (code, status) if part)
+            return f"{prefix}: {detail}"
+        return detail
+
+    @staticmethod
+    def _extract_images(response: Any) -> Tuple[List[Image.Image], Optional[str]]:
+        """Return the images in a response, or the reason none came back.
+
+        A response can carry no candidates, a candidate without content,
+        or content whose parts are None (for example when generation was
+        stopped by an image safety filter).
+        """
+        candidate = response.candidates[0] if response.candidates else None
+        content = getattr(candidate, "content", None) if candidate else None
+        parts = getattr(content, "parts", None) or []
+
+        images: List[Image.Image] = []
+        undecodable = 0
+        for part in parts:
+            if getattr(part, "inline_data", None) and part.inline_data.data:
+                try:
+                    images.append(Image.open(BytesIO(part.inline_data.data)))
+                except UnidentifiedImageError:
+                    undecodable += 1
+        if images:
+            return images, None
+
+        finish = getattr(candidate, "finish_reason", None) if candidate else None
+        finish_name = getattr(finish, "name", None)
+        if not isinstance(finish_name, str):
+            finish_name = str(finish) if isinstance(finish, str) else "unknown"
+        if candidate is None:
+            finish_name = "no candidates"
+        reason = f"No image returned (finish_reason={finish_name})"
+        if undecodable:
+            reason += f"; {undecodable} undecodable image part(s)"
+        for part in parts:
+            text = getattr(part, "text", None)
+            if text:
+                reason += f": {text.strip()[:200]}"
+                break
+        return [], reason
+
+    @staticmethod
+    def _sdk_image_size(image_size: Optional[str]) -> Optional[str]:
+        """Map a tool-facing size (e.g. 0.5K) to the value the API expects."""
+        if image_size is None:
+            return None
+        return SDK_IMAGE_SIZE_VALUES.get(image_size, image_size)
+
+    @staticmethod
+    def _ratio_value(ratio: str) -> float:
+        w, h = ratio.split(":")
+        return int(w) / int(h)
+
+    @staticmethod
+    def _nearest_aspect_ratio(
+        width: int, height: int, model: Optional[str] = None
+    ) -> str:
+        """Pick the ratio closest to an image's shape among those the model honours.
+
+        Distances are compared in log space so wide and tall sources are
+        treated alike. Models without panoramic support get the nearest
+        standard ratio; unknown models may use any ratio.
+        """
+        if width <= 0 or height <= 0:
+            return "1:1"
+        target = math.log(width / height)
+        best = "1:1"
+        best_diff = float("inf")
+        for ratio in supported_aspect_ratios(model):
+            diff = abs(math.log(ImagenAPIClient._ratio_value(ratio)) - target)
+            if diff < best_diff:
+                best, best_diff = ratio, diff
+        return best
+
+    @staticmethod
+    def _aspect_ratio_warning(
+        width: int, height: int, ratio: str, model: str
+    ) -> Optional[str]:
+        """Warn when the chosen ratio differs from the source shape."""
+        if width <= 0 or height <= 0:
+            return None
+        source = math.log(width / height)
+        drift = abs(math.log(ImagenAPIClient._ratio_value(ratio)) - source)
+        if drift <= math.log(ASPECT_RATIO_TOLERANCE):
+            return None
+        return (
+            f"Source is {width}x{height}; {model} renders at {ratio}, the "
+            "nearest ratio it supports, so the output shape differs from the "
+            "source."
+        )
+
+    @staticmethod
+    def _size_tier_for_edge(long_edge: int) -> str:
+        """Smallest 1K/2K/4K tier whose longest edge covers ``long_edge``."""
+        for tier in ("1K", "2K", "4K"):
+            if long_edge <= IMAGE_SIZE_PIXELS[tier]:
+                return tier
+        return "4K"
 
     @staticmethod
     def _embed_metadata(
@@ -420,7 +701,7 @@ class ImagenAPIClient:
             if aspect_ratio:
                 image_config_params["aspect_ratio"] = aspect_ratio
             if image_size:
-                image_config_params["image_size"] = image_size
+                image_config_params["image_size"] = self._sdk_image_size(image_size)
             # NOTE: person_generation is NOT passed to ImageConfig.
             # The Gemini API (generate_content) does not support it —
             # the SDK raises ValueError in _ImageConfig_to_mldev().
@@ -464,13 +745,7 @@ class ImagenAPIClient:
             if blocked is not None:
                 return blocked
 
-            # Extract image from response
-            images: List[Image.Image] = []
-            if response.candidates:
-                for part in response.candidates[0].content.parts:
-                    if hasattr(part, "inline_data") and part.inline_data:
-                        img = Image.open(BytesIO(part.inline_data.data))
-                        images.append(img)
+            images, no_image_reason = self._extract_images(response)
 
             if images:
                 self._save_image(images[0], output_path, output_format)
@@ -518,7 +793,7 @@ class ImagenAPIClient:
                 return GenerationResult(
                     success=False,
                     output="",
-                    error="No images generated",
+                    error=no_image_reason or "No images generated",
                 )
 
         except Exception as e:
@@ -614,13 +889,7 @@ class ImagenAPIClient:
             if blocked is not None:
                 return blocked
 
-            # Extract image from response
-            images: List[Image.Image] = []
-            if response.candidates:
-                for part in response.candidates[0].content.parts:
-                    if hasattr(part, "inline_data") and part.inline_data:
-                        img = Image.open(BytesIO(part.inline_data.data))
-                        images.append(img)
+            images, no_image_reason = self._extract_images(response)
 
             if images:
                 self._save_image(images[0], output_path, output_format)
@@ -641,7 +910,7 @@ class ImagenAPIClient:
                 return GenerationResult(
                     success=False,
                     output="",
-                    error="No images generated",
+                    error=no_image_reason or "No images generated",
                 )
 
         except Exception as e:
@@ -908,32 +1177,41 @@ class ImagenAPIClient:
         return self._extract_text_from_response(response)
 
     # ------------------------------------------------------------------
-    # Vertex AI tools (optional)
+    # Generative upscale and mode-driven editing
     # ------------------------------------------------------------------
+    # Imagen's dedicated upscale and edit models were retired by Google in
+    # 2026. Both tools now re-render with a Gemini image model through
+    # generate_content on whichever backend is configured.
 
-    def _get_vertex_client(self) -> Any:
-        """Get a Vertex AI-authenticated genai client.
+    @staticmethod
+    def _upscale_target(
+        width: int, height: int, upscale_factor: str
+    ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        """Choose the output size tier for an upscale.
 
-        Raises ImportError if google-cloud-aiplatform is not installed.
+        Returns (image_size, warning, error). The tier is the smallest of
+        1K/2K/4K whose longest edge covers ``longest edge * factor``,
+        capped at 4K.
         """
-        try:
-            from google import genai
-
-            # Vertex AI client uses project/location instead of API key
-            from pixelforge_mcp.config import get_config
-
-            config = get_config()
-
-            return genai.Client(
-                vertexai=True,
-                project=config.vertex.project_id,
-                location=config.vertex.location,
+        factor = UPSCALE_FACTORS[upscale_factor]
+        long_edge = max(width, height)
+        wanted = long_edge * factor
+        tier = ImagenAPIClient._size_tier_for_edge(wanted)
+        tier_px = IMAGE_SIZE_PIXELS[tier]
+        if tier_px <= long_edge:
+            return (
+                None,
+                None,
+                f"Image is already {long_edge}px on its longest edge; the "
+                "maximum output is 4K (4096px).",
             )
-        except ImportError:
-            raise ImportError(
-                "Vertex AI requires google-cloud-aiplatform. "
-                "Install with: pip install pixelforge-mcp[vertex]"
+        warning = None
+        if wanted > tier_px:
+            warning = (
+                f"{upscale_factor} would need {wanted}px; output is capped "
+                f"at {tier} ({tier_px}px)."
             )
+        return tier, warning, None
 
     async def upscale(
         self,
@@ -941,48 +1219,100 @@ class ImagenAPIClient:
         output_path: Path,
         upscale_factor: str = "x2",
         output_format: str = "png",
+        model: Optional[str] = None,
     ) -> GenerationResult:
-        """Upscale an image using Vertex AI (requires Vertex credentials)."""
+        """Upscale an image by re-rendering it at a higher size tier.
+
+        The source image is passed as a reference together with an
+        instruction to reproduce it exactly; the model outputs 2K or 4K.
+        """
+        use_model = model or DEFAULT_MODEL
+        retired = self._retired_model_error(use_model)
+        if retired is not None:
+            return retired
+        use_model, alias_warning = self._resolve_deprecated_alias(use_model)
+
         try:
             from google.genai import types
 
-            client = self._get_vertex_client()
-
-            # The SDK expects types.Image; a PIL image is coerced to one with
-            # no bytes, which sends an empty image to the API.
-            response = await asyncio.to_thread(
-                client.models.upscale_image,
-                model="imagen-4.0-upscale-preview",
-                image=types.Image.from_file(location=str(image_path)),
-                upscale_factor=upscale_factor,
-                config=types.UpscaleImageConfig(
-                    output_mime_type="image/png",
-                ),
+            source = Image.open(str(image_path))
+            width, height = source.size
+            image_size, cap_warning, error = self._upscale_target(
+                width, height, upscale_factor
             )
+            if error or image_size is None:
+                return GenerationResult(success=False, output="", error=error)
 
-            if response.generated_images:
-                genai_img = response.generated_images[0].image
-                result_img = Image.open(BytesIO(genai_img.image_bytes))
-                self._save_image(result_img, output_path, output_format)
-                return GenerationResult(
-                    success=True,
-                    output=f"Image upscaled ({upscale_factor}) to {output_path}",
-                    images=[result_img],
-                    image_paths=[str(output_path)],
-                    data={
-                        "upscale_factor": upscale_factor,
-                        "image_path": str(output_path),
-                    },
-                )
-            else:
+            supported = supported_image_sizes(use_model)
+            if supported is not None and image_size not in supported:
                 return GenerationResult(
                     success=False,
                     output="",
-                    error="Upscaling produced no output",
+                    error=(
+                        f"{use_model} cannot output {image_size}. Use "
+                        f"{DEFAULT_MODEL} or gemini-3-pro-image for upscaling."
+                    ),
                 )
 
-        except ImportError as e:
-            return GenerationResult(success=False, output="", error=str(e))
+            aspect_ratio = self._nearest_aspect_ratio(width, height, use_model)
+            ratio_warning = self._aspect_ratio_warning(
+                width, height, aspect_ratio, use_model
+            )
+            client = self._get_genai_client()
+            config = types.GenerateContentConfig(
+                response_modalities=["IMAGE"],
+                image_config=types.ImageConfig(
+                    aspect_ratio=aspect_ratio,
+                    image_size=self._sdk_image_size(image_size),
+                ),
+            )
+            response = await client.aio.models.generate_content(
+                model=use_model,
+                contents=[source, UPSCALE_INSTRUCTION],
+                config=config,
+            )
+
+            blocked = self._check_safety_block(response)
+            if blocked is not None:
+                return blocked
+
+            images, no_image_reason = self._extract_images(response)
+            if not images:
+                return GenerationResult(
+                    success=False,
+                    output="",
+                    error=no_image_reason or "Upscaling produced no output",
+                )
+
+            result_img = images[0]
+            self._save_image(result_img, output_path, output_format)
+            warnings: List[str] = [GENERATIVE_UPSCALE_WARNING]
+            if cap_warning:
+                warnings.append(cap_warning)
+            if ratio_warning:
+                warnings.append(ratio_warning)
+            if alias_warning:
+                warnings.append(alias_warning)
+            return GenerationResult(
+                success=True,
+                output=(
+                    f"Image upscaled ({upscale_factor}, {image_size}) to "
+                    f"{output_path}"
+                ),
+                images=[result_img],
+                image_paths=[str(output_path)],
+                data={
+                    "upscale_factor": upscale_factor,
+                    "model": use_model,
+                    "method": "generative",
+                    "image_size": image_size,
+                    "source_size": [width, height],
+                    "output_size": list(result_img.size),
+                    "image_path": str(output_path),
+                    "warnings": warnings,
+                },
+            )
+
         except Exception as e:
             error_msg = self._classify_error(e)
             logger.error(f"Upscaling failed: {error_msg}", exc_info=True)
@@ -996,87 +1326,104 @@ class ImagenAPIClient:
         output_path: Path,
         mask_path: Optional[Path] = None,
         output_format: str = "png",
+        model: Optional[str] = None,
     ) -> GenerationResult:
-        """Advanced image editing using Vertex AI EditImage API."""
+        """Mode-driven editing (inpaint, outpaint, background swap, ...).
+
+        Each mode wraps the prompt in an instruction tuned for that edit.
+        An optional mask is sent as a second image that guides the model.
+        """
+        template = EDIT_MODE_INSTRUCTIONS.get(edit_mode)
+        if template is None:
+            return GenerationResult(
+                success=False,
+                output="",
+                error=f"Unknown edit mode: {edit_mode}",
+            )
+
+        use_model = model or DEFAULT_MODEL
+        retired = self._retired_model_error(use_model)
+        if retired is not None:
+            return retired
+        use_model, alias_warning = self._resolve_deprecated_alias(use_model)
+
         try:
             from google.genai import types
 
-            client = self._get_vertex_client()
+            source = Image.open(str(image_path))
+            width, height = source.size
 
-            # Map user-friendly mode names to SDK enum values
-            mode_map: Dict[str, types.EditMode] = {
-                "inpaint_removal": types.EditMode.EDIT_MODE_INPAINT_REMOVAL,
-                "inpaint_insertion": types.EditMode.EDIT_MODE_INPAINT_INSERTION,
-                "outpaint": types.EditMode.EDIT_MODE_OUTPAINT,
-                "background_swap": types.EditMode.EDIT_MODE_BGSWAP,
-                "style_transfer": types.EditMode.EDIT_MODE_STYLE,
-                "product_image": types.EditMode.EDIT_MODE_PRODUCT_IMAGE,
+            # Match the source resolution where the model allows it.
+            image_size = self._size_tier_for_edge(max(width, height))
+            supported = supported_image_sizes(use_model)
+            if supported is not None and image_size not in supported:
+                image_size = supported[-1]
+
+            image_config_params: Dict[str, Any] = {
+                "image_size": self._sdk_image_size(image_size),
             }
-            sdk_mode = mode_map.get(edit_mode)
-            if not sdk_mode:
-                return GenerationResult(
-                    success=False,
-                    output="",
-                    error=f"Unknown edit mode: {edit_mode}",
+            ratio_warning: Optional[str] = None
+            if edit_mode != "outpaint":
+                aspect_ratio = self._nearest_aspect_ratio(width, height, use_model)
+                image_config_params["aspect_ratio"] = aspect_ratio
+                ratio_warning = self._aspect_ratio_warning(
+                    width, height, aspect_ratio, use_model
                 )
 
-            # Build reference images (the SDK expects types.Image, not PIL)
-            reference_images: List[
-                Union[types.RawReferenceImage, types.MaskReferenceImage]
-            ] = [
-                types.RawReferenceImage(
-                    reference_image=types.Image.from_file(location=str(image_path)),
-                    reference_id=0,
-                )
-            ]
+            contents: List[Any] = [source]
             if mask_path:
-                reference_images.append(
-                    types.MaskReferenceImage(
-                        reference_image=types.Image.from_file(location=str(mask_path)),
-                        reference_id=1,
-                        config=types.MaskReferenceConfig(
-                            mask_mode=types.MaskReferenceMode.MASK_MODE_USER_PROVIDED,
-                        ),
-                    )
-                )
+                contents.append(Image.open(str(mask_path)))
+                contents.append(MASK_INSTRUCTION)
+            contents.append(template.format(prompt=prompt))
 
-            config = types.EditImageConfig(
-                edit_mode=sdk_mode,
-                number_of_images=1,
-                output_mime_type="image/png",
+            client = self._get_genai_client()
+            config = types.GenerateContentConfig(
+                response_modalities=["IMAGE"],
+                image_config=types.ImageConfig(**image_config_params),
+            )
+            response = await client.aio.models.generate_content(
+                model=use_model, contents=contents, config=config
             )
 
-            response = await asyncio.to_thread(
-                client.models.edit_image,
-                model="imagen-3.0-capability-001",
-                prompt=prompt,
-                reference_images=reference_images,
-                config=config,
-            )
+            blocked = self._check_safety_block(response)
+            if blocked is not None:
+                return blocked
 
-            if response.generated_images:
-                genai_img = response.generated_images[0].image
-                result_img = Image.open(BytesIO(genai_img.image_bytes))
-                self._save_image(result_img, output_path, output_format)
-                return GenerationResult(
-                    success=True,
-                    output=f"Advanced edit ({edit_mode}) applied to {output_path}",
-                    images=[result_img],
-                    image_paths=[str(output_path)],
-                    data={
-                        "edit_mode": edit_mode,
-                        "image_path": str(output_path),
-                    },
-                )
-            else:
+            images, no_image_reason = self._extract_images(response)
+            if not images:
                 return GenerationResult(
                     success=False,
                     output="",
-                    error="Advanced edit produced no output",
+                    error=no_image_reason or "Advanced edit produced no output",
                 )
 
-        except ImportError as e:
-            return GenerationResult(success=False, output="", error=str(e))
+            result_img = images[0]
+            self._save_image(result_img, output_path, output_format)
+            warnings: List[str] = []
+            if mask_path:
+                warnings.append(MASK_GUIDANCE_WARNING)
+            if ratio_warning:
+                warnings.append(ratio_warning)
+            if alias_warning:
+                warnings.append(alias_warning)
+            data: Dict[str, Any] = {
+                "edit_mode": edit_mode,
+                "model": use_model,
+                "method": "generative",
+                "mask_used": mask_path is not None,
+                "image_size": image_size,
+                "image_path": str(output_path),
+            }
+            if warnings:
+                data["warnings"] = warnings
+            return GenerationResult(
+                success=True,
+                output=f"Advanced edit ({edit_mode}) applied to {output_path}",
+                images=[result_img],
+                image_paths=[str(output_path)],
+                data=data,
+            )
+
         except Exception as e:
             error_msg = self._classify_error(e)
             logger.error(f"Advanced edit failed: {error_msg}", exc_info=True)

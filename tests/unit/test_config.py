@@ -11,8 +11,19 @@ from pixelforge_mcp.config import (
     MaskedStr,
     ServerConfig,
     StorageConfig,
+    VertexConfig,
     get_config,
     reload_config,
+)
+
+CREDENTIAL_ENV_VARS = (
+    "GOOGLE_API_KEY",
+    "GOOGLE_GENERATIVE_AI_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_CLOUD_LOCATION",
+    "GOOGLE_GENAI_USE_VERTEXAI",
+    "GOOGLE_GENAI_USE_ENTERPRISE",
 )
 
 
@@ -220,3 +231,178 @@ class TestConfigSingleton:
         assert config2 is not config1
         # But same type
         assert isinstance(config2, Config)
+
+
+class TestVertexConfig:
+    """Tests for VertexConfig model."""
+
+    def test_default_values(self):
+        """Vertex AI is off by default and targets the global location."""
+        config = VertexConfig()
+        assert config.project_id is None
+        assert config.location == "global"
+        assert config.enabled is False
+        assert config.prefer is False
+
+
+class TestBackendSelection:
+    """Tests for Config.backend and the environment variables behind it."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_credential_env(self, monkeypatch):
+        for var in CREDENTIAL_ENV_VARS:
+            monkeypatch.delenv(var, raising=False)
+
+    @staticmethod
+    def _load(tmp_path):
+        return Config.load(tmp_path / "config.yaml")
+
+    def test_no_credentials_defaults_to_gemini_api(self, tmp_path):
+        config = self._load(tmp_path)
+        assert config.backend == "gemini_api"
+        assert config.vertex.enabled is False
+        assert config.vertex.project_id is None
+
+    def test_api_key_only_selects_gemini_api(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+
+        config = self._load(tmp_path)
+
+        assert config.backend == "gemini_api"
+        assert config.vertex.enabled is False
+
+    def test_project_only_selects_vertex_ai(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "my-project")
+
+        config = self._load(tmp_path)
+
+        assert config.backend == "vertex_ai"
+        assert config.vertex.enabled is True
+        assert config.vertex.project_id == "my-project"
+        assert config.vertex.location == "global"
+        assert config.vertex.prefer is False
+        assert config.imagen.api_key is None
+
+    def test_api_key_and_project_select_gemini_api(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "my-project")
+
+        config = self._load(tmp_path)
+
+        assert config.backend == "gemini_api"
+        assert config.vertex.enabled is True
+        assert config.vertex.prefer is False
+
+    def test_use_vertexai_flag_prefers_vertex_ai(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "my-project")
+        monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+
+        config = self._load(tmp_path)
+
+        assert config.backend == "vertex_ai"
+        assert config.vertex.prefer is True
+        assert config.imagen.api_key == "test-key"
+
+    @pytest.mark.parametrize("value", ["true", "TRUE", " True ", "1", "yes", "on"])
+    def test_truthy_use_vertexai_values(self, tmp_path, monkeypatch, value):
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "my-project")
+        monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", value)
+
+        config = self._load(tmp_path)
+
+        assert config.vertex.prefer is True
+        assert config.backend == "vertex_ai"
+
+    @pytest.mark.parametrize("value", ["false", "0", "no", "off", ""])
+    def test_falsy_use_vertexai_values(self, tmp_path, monkeypatch, value):
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "my-project")
+        monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", value)
+
+        config = self._load(tmp_path)
+
+        assert config.vertex.prefer is False
+        assert config.backend == "gemini_api"
+
+    def test_use_enterprise_flag_prefers_vertex_ai(self, tmp_path, monkeypatch):
+        """GOOGLE_GENAI_USE_ENTERPRISE is the SDK's newer name for the switch."""
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "my-project")
+        monkeypatch.setenv("GOOGLE_GENAI_USE_ENTERPRISE", "1")
+
+        config = self._load(tmp_path)
+
+        assert config.vertex.prefer is True
+        assert config.backend == "vertex_ai"
+
+    def test_location_env_overrides_default(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "my-project")
+        monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "us")
+
+        config = self._load(tmp_path)
+
+        assert config.vertex.location == "us"
+
+    def test_location_env_overrides_file(self, tmp_path, monkeypatch):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            yaml.dump({"vertex": {"project_id": "my-project", "location": "us"}})
+        )
+        monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "europe-west4")
+
+        config = Config.load(config_file)
+
+        assert config.vertex.location == "europe-west4"
+        assert config.vertex.project_id == "my-project"
+
+    def test_vertex_section_from_file(self, tmp_path, monkeypatch):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "vertex": {
+                        "project_id": "my-project",
+                        "enabled": True,
+                        "prefer": True,
+                        "location": "global",
+                    }
+                }
+            )
+        )
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+
+        config = Config.load(config_file)
+
+        assert config.backend == "vertex_ai"
+        assert config.vertex.project_id == "my-project"
+        assert config.vertex.prefer is True
+
+    def test_backend_property_without_environment(self, tmp_path):
+        storage = StorageConfig(output_dir=tmp_path)
+
+        assert Config(storage=storage).backend == "gemini_api"
+        assert (
+            Config(
+                storage=storage,
+                vertex=VertexConfig(project_id="my-project", enabled=True),
+            ).backend
+            == "vertex_ai"
+        )
+        assert (
+            Config(
+                storage=storage,
+                imagen=ImagenConfig(api_key=MaskedStr("test-key")),
+                vertex=VertexConfig(project_id="my-project", enabled=True),
+            ).backend
+            == "gemini_api"
+        )
+        assert (
+            Config(
+                storage=storage,
+                imagen=ImagenConfig(api_key=MaskedStr("test-key")),
+                vertex=VertexConfig(project_id="my-project", enabled=True, prefer=True),
+            ).backend
+            == "vertex_ai"
+        )

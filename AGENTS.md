@@ -5,7 +5,7 @@ MCP server for AI-powered image generation, editing, analysis, and transformatio
 ## Prerequisites
 
 - Python 3.10+
-- Google API key ([Get one here](https://aistudio.google.com/apikey))
+- Google API key ([Get one here](https://aistudio.google.com/apikey)) or a Google Cloud project with Vertex AI
 - pipx ([Installation guide](https://pipx.pypa.io/stable/installation/))
 
 ## Install
@@ -83,7 +83,9 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 Quit and restart Claude Desktop for changes to take effect.
 
-## API Key
+## Authentication
+
+### API key
 
 Any of these environment variables will work:
 
@@ -92,6 +94,19 @@ Any of these environment variables will work:
 | `GOOGLE_API_KEY` | Standard |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | Alternative |
 | `GEMINI_API_KEY` | Alternative |
+
+### Vertex AI backend
+
+Every tool can run through Vertex AI instead of an API key. Credentials come from Application Default Credentials; no extra packages are needed (`pixelforge-mcp[vertex]` is kept for compatibility and installs nothing).
+
+| Variable | Notes |
+|----------|-------|
+| `GOOGLE_CLOUD_PROJECT` | Project ID. Setting it enables the Vertex AI backend |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Service account key file. Not needed with another ADC source |
+| `GOOGLE_CLOUD_LOCATION` | Default `global`. The current Gemini image and text models are served from the global endpoint |
+| `GOOGLE_GENAI_USE_VERTEXAI` | `true` to prefer Vertex AI when an API key is also set (`GOOGLE_GENAI_USE_ENTERPRISE` is accepted as well) |
+
+Selection: an API key selects the Gemini API; `GOOGLE_CLOUD_PROJECT` with no key selects Vertex AI; with both, the key wins unless `GOOGLE_GENAI_USE_VERTEXAI=true`. `get_server_info` reports the active backend under `backend.name`.
 
 ## Available Tools (19)
 
@@ -103,6 +118,8 @@ Any of these environment variables will work:
 | `remove_background` | Remove image background |
 | `transform_image` | Crop, resize, rotate, flip, blur, sharpen, grayscale, watermark |
 | `batch_generate` | Generate up to 10 images in parallel |
+| `upscale_image` | Generative upscale to the next 1K/2K/4K tier (re-render with a Gemini image model) |
+| `advanced_edit` | Inpainting, outpainting, background swap, style transfer, product shots (prompt-driven, optional mask guidance) |
 
 ### Analysis
 | Tool | Description |
@@ -130,12 +147,6 @@ Analysis tools and `optimize_prompt` accept a `model` override (default `gemini-
 | `list_history` | Browse generation history with filtering |
 | `get_generation_details` | Get details of a specific generation |
 
-### Vertex AI (Optional)
-| Tool | Description |
-|------|-------------|
-| `upscale_image` | Upscale images x2 or x4 (requires Vertex AI) |
-| `advanced_edit` | Inpainting, outpainting, background swap, style transfer (requires Vertex AI) |
-
 ## Model Selection
 
 ### Image Models
@@ -145,7 +156,9 @@ Analysis tools and `optimize_prompt` accept a `model` override (default `gemini-
 - **Max text fidelity:** `gemini-3-pro-image` — best text rendering, complex multi-turn edits, $0.134/img at 1K/2K
 - **Deprecated:** `gemini-2.5-flash-image` — shutdown announced, use `gemini-3.1-flash-lite-image`
 
-Panoramic ratios (1:4, 4:1, 1:8, 8:1) require `gemini-nano-banana-2.1` or `gemini-3.1-flash-image`. `0.5K` is `gemini-3.1-flash-image` only; `gemini-3.1-flash-lite-image` is 1K only.
+Panoramic ratios (1:4, 4:1, 1:8, 8:1) require `gemini-nano-banana-2.1` or `gemini-3.1-flash-image`. `0.5K` is `gemini-3.1-flash-image` only and is sent to the API as `512px`; `gemini-3.1-flash-lite-image` is 1K only. `generate_image` rejects a size the chosen model cannot output.
+
+`upscale_image` and `advanced_edit` re-render with `gemini-nano-banana-2.1` unless `model` is set. `upscale_image` outputs the smallest of 1K/2K/4K that covers the source times the factor (capped at 4K) and needs 2K/4K output (`gemini-nano-banana-2.1`, `gemini-3.1-flash-image`, or `gemini-3-pro-image`), so `gemini-3.1-flash-lite-image` is rejected there. Both tools pin the nearest aspect ratio the model supports; models without panoramic output get a standard ratio and a warning.
 
 ### Analysis Models
 - **Default:** `gemini-3.5-flash-lite` — $0.30 in / $2.50 out per 1M tokens
@@ -170,6 +183,12 @@ export PATH="$HOME/.local/bin:$PATH"
 ```
 
 **"Invalid API key"** — Verify your key at [Google AI Studio](https://aistudio.google.com/apikey) and ensure Gemini API access is enabled.
+
+**"Publisher model ... was not found" (Vertex AI)** — With a regional location in the message, set `GOOGLE_CLOUD_LOCATION=global` (the default); the current Gemini image and text models are served from the global endpoint. With `locations/global` in the message, the model ID is unknown or retired on Vertex AI (`list_available_models` lists current IDs), or the project cannot access it yet.
+
+**"Rate limit exceeded" or "Permission denied"** — The message carries Google's own text. A quota `limit: 0` or "has not been used in project ... or it is disabled" is a project setup limit: enable the Vertex AI API (or the Generative Language API for an API key), grant `roles/aiplatform.user`, or request a quota increase.
+
+**"No credentials found"** — Set an API key, or `GOOGLE_CLOUD_PROJECT` with Application Default Credentials.
 
 **MCP server not starting** — Check your client configuration:
 - Claude Code: `~/.claude.json`
@@ -198,14 +217,14 @@ src/pixelforge_mcp/
 │   ├── __init__.py      # Templates package
 │   └── prompts.yaml     # 24 curated prompt templates
 └── utils/
-    ├── api_client.py    # ImagenAPIClient — direct google-genai SDK
+    ├── api_client.py    # ImagenAPIClient — google-genai SDK (Gemini API or Vertex AI)
     ├── history.py       # GenerationHistory — JSON append-only log
     ├── templates.py     # TemplateLibrary — load, list, apply templates
     ├── transforms.py    # Image transforms — crop, resize, rotate, etc.
     └── validation.py    # Pydantic input models with validation rules
 ```
 
-**Request flow:** MCP client → `server.py` (tool handler) → `validation.py` (validates input) → `api_client.py` (calls Gemini API) → response back to client.
+**Request flow:** MCP client → `server.py` (tool handler) → `validation.py` (validates input) → `api_client.py` (calls the Gemini API or Vertex AI) → response back to client.
 
 **Key files for most changes:**
 - `validation.py` — input models and constraints (Pydantic)
@@ -296,7 +315,7 @@ pytest tests/unit/ -v
 # Specific test file
 pytest tests/unit/test_validation.py -v
 
-# Integration tests (requires GOOGLE_API_KEY)
+# Integration tests (requires GOOGLE_API_KEY, or GOOGLE_CLOUD_PROJECT with ADC)
 pytest tests/integration/ -v
 ```
 

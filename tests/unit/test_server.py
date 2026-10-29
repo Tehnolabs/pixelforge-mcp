@@ -11,6 +11,13 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from pixelforge_mcp import server as server_module
+from pixelforge_mcp.config import (
+    Config,
+    ImagenConfig,
+    MaskedStr,
+    StorageConfig,
+    VertexConfig,
+)
 from pixelforge_mcp.server import (
     estimate_cost as _estimate_cost_tool,
 )
@@ -498,9 +505,12 @@ class TestGenerateImageMultiImage:
     """Tests for multi-image generation aggregate behavior."""
 
     @pytest.mark.asyncio
+    @patch("pixelforge_mcp.utils.history.get_history")
     @patch("pixelforge_mcp.server.get_api_client")
     @patch("pixelforge_mcp.server.get_config")
-    async def test_all_succeed(self, mock_config, mock_get_client, tmp_path):
+    async def test_all_succeed(
+        self, mock_config, mock_get_client, mock_history, tmp_path
+    ):
         """Test multi-image generation when all images succeed."""
         pass  # generate_image_fn imported at module level
 
@@ -530,9 +540,12 @@ class TestGenerateImageMultiImage:
         assert "partial_failure" not in result
 
     @pytest.mark.asyncio
+    @patch("pixelforge_mcp.utils.history.get_history")
     @patch("pixelforge_mcp.server.get_api_client")
     @patch("pixelforge_mcp.server.get_config")
-    async def test_partial_failure(self, mock_config, mock_get_client, tmp_path):
+    async def test_partial_failure(
+        self, mock_config, mock_get_client, mock_history, tmp_path
+    ):
         """Test multi-image generation with some failures."""
         pass  # generate_image_fn imported at module level
 
@@ -573,9 +586,10 @@ class TestGenerateImageMultiImage:
         assert "2/3" in result["message"]
 
     @pytest.mark.asyncio
+    @patch("pixelforge_mcp.utils.history.get_history")
     @patch("pixelforge_mcp.server.get_api_client")
     @patch("pixelforge_mcp.server.get_config")
-    async def test_all_fail(self, mock_config, mock_get_client, tmp_path):
+    async def test_all_fail(self, mock_config, mock_get_client, mock_history, tmp_path):
         """Test multi-image generation when all images fail."""
         pass  # generate_image_fn imported at module level
 
@@ -602,10 +616,11 @@ class TestGenerateImageMultiImage:
         assert len(result["errors"]) == 2
 
     @pytest.mark.asyncio
+    @patch("pixelforge_mcp.utils.history.get_history")
     @patch("pixelforge_mcp.server.get_api_client")
     @patch("pixelforge_mcp.server.get_config")
     async def test_single_image_no_partial_failure_key(
-        self, mock_config, mock_get_client, tmp_path
+        self, mock_config, mock_get_client, mock_history, tmp_path
     ):
         """Test single image generation does not set partial_failure."""
         pass  # generate_image_fn imported at module level
@@ -935,6 +950,378 @@ class TestGetServerInfo:
         info = server_module.get_server_info()
 
         assert info["imagen"]["default_model"] == "gemini-nano-banana-2.1"
+
+    def test_generation_tools_include_upscale_and_advanced_edit(self):
+        """The formerly Vertex-only tools are ordinary generation tools."""
+        info = server_module.get_server_info()
+
+        generation = info["tools"]["generation"]
+        assert "upscale_image" in generation
+        assert "advanced_edit" in generation
+        assert "features" not in info["vertex_ai"]
+
+    @patch("pixelforge_mcp.server.get_config")
+    def test_backend_block_for_vertex_ai(self, mock_config, tmp_path):
+        """A preferred Vertex project is reported as the active backend."""
+        mock_config.return_value = Config(
+            storage=StorageConfig(output_dir=tmp_path),
+            imagen=ImagenConfig(api_key=MaskedStr("test-key")),
+            vertex=VertexConfig(project_id="my-project", enabled=True, prefer=True),
+        )
+
+        info = server_module.get_server_info()
+
+        assert info["backend"] == {
+            "name": "vertex_ai",
+            "project_id": "my-project",
+            "location": "global",
+        }
+        vertex = info["vertex_ai"]
+        assert vertex["enabled"] is True
+        assert vertex["active"] is True
+        assert vertex["project_id"] == "my-project"
+        assert vertex["location"] == "global"
+        assert "GOOGLE_CLOUD_PROJECT" in vertex["setup"]
+        assert "GOOGLE_GENAI_USE_VERTEXAI" in vertex["setup"]
+
+    @patch("pixelforge_mcp.server.get_config")
+    def test_backend_block_for_gemini_api(self, mock_config, tmp_path):
+        """An API key alone reports the Gemini API with Vertex inactive."""
+        mock_config.return_value = Config(
+            storage=StorageConfig(output_dir=tmp_path),
+            imagen=ImagenConfig(api_key=MaskedStr("test-key")),
+        )
+
+        info = server_module.get_server_info()
+
+        assert info["backend"]["name"] == "gemini_api"
+        assert info["backend"]["project_id"] is None
+        assert info["backend"]["location"] == "global"
+        assert info["vertex_ai"]["enabled"] is False
+        assert info["vertex_ai"]["active"] is False
+
+    @patch("pixelforge_mcp.server.get_config")
+    def test_project_with_api_key_is_enabled_but_inactive(self, mock_config, tmp_path):
+        """A configured project that is not preferred stays inactive."""
+        mock_config.return_value = Config(
+            storage=StorageConfig(output_dir=tmp_path),
+            imagen=ImagenConfig(api_key=MaskedStr("test-key")),
+            vertex=VertexConfig(project_id="my-project", enabled=True),
+        )
+
+        info = server_module.get_server_info()
+
+        assert info["backend"]["name"] == "gemini_api"
+        assert info["vertex_ai"]["enabled"] is True
+        assert info["vertex_ai"]["active"] is False
+
+
+# ------------------------------------------------------------------
+# upscale_image / advanced_edit
+# ------------------------------------------------------------------
+
+
+def _upscale_client():
+    """Mock client whose upscale() writes the output file and succeeds."""
+
+    async def fake_upscale(**kwargs):
+        output_path = kwargs["output_path"]
+        output_path.write_bytes(b"fake image data")
+        model = kwargs["model"] or "gemini-nano-banana-2.1"
+        return GenerationResult(
+            success=True,
+            output=f"Image upscaled ({kwargs['upscale_factor']}, 2K) to {output_path}",
+            image_paths=[str(output_path)],
+            data={
+                "upscale_factor": kwargs["upscale_factor"],
+                "model": model,
+                "method": "generative",
+                "image_size": "2K",
+                "source_size": [1024, 1024],
+                "output_size": [2048, 2048],
+                "image_path": str(output_path),
+                "warnings": ["generative re-render"],
+            },
+        )
+
+    client = Mock()
+    client.upscale = AsyncMock(side_effect=fake_upscale)
+    return client
+
+
+def _advanced_edit_client():
+    """Mock client whose advanced_edit() writes the output file and succeeds."""
+
+    async def fake_edit(**kwargs):
+        output_path = kwargs["output_path"]
+        output_path.write_bytes(b"fake image data")
+        data = {
+            "edit_mode": kwargs["edit_mode"],
+            "model": kwargs["model"] or "gemini-nano-banana-2.1",
+            "method": "generative",
+            "mask_used": kwargs["mask_path"] is not None,
+            "image_size": "1K",
+            "image_path": str(output_path),
+        }
+        if kwargs["mask_path"] is not None:
+            data["warnings"] = ["mask is guidance"]
+        return GenerationResult(
+            success=True,
+            output=f"Advanced edit ({kwargs['edit_mode']}) applied to {output_path}",
+            image_paths=[str(output_path)],
+            data=data,
+        )
+
+    client = Mock()
+    client.advanced_edit = AsyncMock(side_effect=fake_edit)
+    return client
+
+
+class TestUpscaleImageHandler:
+    """Tests for the upscale_image tool handler."""
+
+    @pytest.fixture(autouse=True)
+    def _no_vertex_project(self, monkeypatch):
+        monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+
+    @pytest.mark.asyncio
+    @patch("pixelforge_mcp.server.get_api_client")
+    @patch("pixelforge_mcp.server.get_config")
+    async def test_runs_without_vertex_project(
+        self, mock_config, mock_get_client, tmp_path
+    ):
+        """The tool no longer gates on Vertex AI configuration."""
+        mock_config.return_value.storage.output_dir = tmp_path
+        mock_config.return_value.vertex.enabled = False
+        image = tmp_path / "photo.png"
+        image.touch()
+        client = _upscale_client()
+        mock_get_client.return_value = client
+
+        result = await server_module.upscale_image(image_path=str(image))
+
+        assert result["success"] is True
+        assert "Vertex AI is not configured" not in result["message"]
+        assert result["upscale_factor"] == "x2"
+        assert result["model"] == "gemini-nano-banana-2.1"
+        assert result["method"] == "generative"
+        assert result["image_size"] == "2K"
+        assert result["source_size"] == [1024, 1024]
+        assert result["output_size"] == [2048, 2048]
+        assert result["warnings"] == ["generative re-render"]
+        assert Path(result["output_path"]).parent == tmp_path
+        assert Path(result["output_path"]).exists()
+
+        client.upscale.assert_awaited_once()
+        kwargs = client.upscale.call_args.kwargs
+        assert str(kwargs["image_path"]) == str(image)
+        assert kwargs["upscale_factor"] == "x2"
+        assert kwargs["output_format"] == "png"
+        assert kwargs["model"] is None
+
+    @pytest.mark.asyncio
+    @patch("pixelforge_mcp.server.get_api_client")
+    @patch("pixelforge_mcp.server.get_config")
+    async def test_model_and_factor_forwarded(
+        self, mock_config, mock_get_client, tmp_path
+    ):
+        """The model override and factor reach the client."""
+        mock_config.return_value.storage.output_dir = tmp_path
+        image = tmp_path / "photo.png"
+        image.touch()
+        client = _upscale_client()
+        mock_get_client.return_value = client
+
+        result = await server_module.upscale_image(
+            image_path=str(image),
+            upscale_factor="X4",
+            model="gemini-3-pro-image",
+            output_filename="big.png",
+        )
+
+        assert result["success"] is True
+        assert result["model"] == "gemini-3-pro-image"
+        assert result["upscale_factor"] == "x4"
+        assert Path(result["output_path"]).name == "big.png"
+        kwargs = client.upscale.call_args.kwargs
+        assert kwargs["model"] == "gemini-3-pro-image"
+        assert kwargs["upscale_factor"] == "x4"
+
+    @pytest.mark.asyncio
+    @patch("pixelforge_mcp.server.get_api_client")
+    @patch("pixelforge_mcp.server.get_config")
+    async def test_lite_model_rejected_before_api_call(
+        self, mock_config, mock_get_client, tmp_path
+    ):
+        """Validation rejects a 1K-only model without calling the client."""
+        mock_config.return_value.storage.output_dir = tmp_path
+        image = tmp_path / "photo.png"
+        image.touch()
+        client = _upscale_client()
+        mock_get_client.return_value = client
+
+        result = await server_module.upscale_image(
+            image_path=str(image), model="gemini-3.1-flash-lite-image"
+        )
+
+        assert result["success"] is False
+        assert result["message"].startswith("Invalid input")
+        assert "outputs 1K only" in result["message"]
+        client.upscale.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("pixelforge_mcp.server.get_api_client")
+    @patch("pixelforge_mcp.server.get_config")
+    async def test_client_error_reaches_response(
+        self, mock_config, mock_get_client, tmp_path
+    ):
+        """A failed client result is reported verbatim."""
+        mock_config.return_value.storage.output_dir = tmp_path
+        image = tmp_path / "photo.png"
+        image.touch()
+        client = Mock()
+        client.upscale = AsyncMock(
+            return_value=GenerationResult(
+                success=False,
+                output="",
+                error="No image returned (finish_reason=IMAGE_SAFETY)",
+            )
+        )
+        mock_get_client.return_value = client
+
+        result = await server_module.upscale_image(image_path=str(image))
+
+        assert result["success"] is False
+        assert result["message"] == "No image returned (finish_reason=IMAGE_SAFETY)"
+
+
+class TestAdvancedEditHandler:
+    """Tests for the advanced_edit tool handler."""
+
+    @pytest.fixture(autouse=True)
+    def _no_vertex_project(self, monkeypatch):
+        monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+
+    @pytest.mark.asyncio
+    @patch("pixelforge_mcp.server.get_api_client")
+    @patch("pixelforge_mcp.server.get_config")
+    async def test_runs_without_vertex_project(
+        self, mock_config, mock_get_client, tmp_path
+    ):
+        """The tool no longer gates on Vertex AI configuration."""
+        mock_config.return_value.storage.output_dir = tmp_path
+        mock_config.return_value.vertex.enabled = False
+        image = tmp_path / "photo.png"
+        image.touch()
+        client = _advanced_edit_client()
+        mock_get_client.return_value = client
+
+        result = await server_module.advanced_edit(
+            image_path=str(image), prompt="a beach", edit_mode="background_swap"
+        )
+
+        assert result["success"] is True
+        assert "Vertex AI is not configured" not in result["message"]
+        assert result["edit_mode"] == "background_swap"
+        assert result["model"] == "gemini-nano-banana-2.1"
+        assert result["method"] == "generative"
+        assert result["image_size"] == "1K"
+        assert result["mask_used"] is False
+        assert result["warnings"] == []
+        assert Path(result["output_path"]).parent == tmp_path
+        assert Path(result["output_path"]).exists()
+
+        client.advanced_edit.assert_awaited_once()
+        kwargs = client.advanced_edit.call_args.kwargs
+        assert str(kwargs["image_path"]) == str(image)
+        assert kwargs["prompt"] == "a beach"
+        assert kwargs["edit_mode"] == "background_swap"
+        assert kwargs["mask_path"] is None
+        assert kwargs["model"] is None
+        assert kwargs["output_format"] == "png"
+
+    @pytest.mark.asyncio
+    @patch("pixelforge_mcp.server.get_api_client")
+    @patch("pixelforge_mcp.server.get_config")
+    async def test_mask_and_model_forwarded(
+        self, mock_config, mock_get_client, tmp_path
+    ):
+        """The mask path and model override reach the client."""
+        mock_config.return_value.storage.output_dir = tmp_path
+        image = tmp_path / "photo.png"
+        image.touch()
+        mask = tmp_path / "mask.png"
+        mask.touch()
+        client = _advanced_edit_client()
+        mock_get_client.return_value = client
+
+        result = await server_module.advanced_edit(
+            image_path=str(image),
+            prompt="the lamp",
+            edit_mode="INPAINT_REMOVAL",
+            mask_path=str(mask),
+            model="gemini-3.1-flash-lite-image",
+        )
+
+        assert result["success"] is True
+        assert result["edit_mode"] == "inpaint_removal"
+        assert result["model"] == "gemini-3.1-flash-lite-image"
+        assert result["mask_used"] is True
+        assert result["warnings"] == ["mask is guidance"]
+        kwargs = client.advanced_edit.call_args.kwargs
+        assert isinstance(kwargs["mask_path"], Path)
+        assert str(kwargs["mask_path"]) == str(mask)
+        assert kwargs["model"] == "gemini-3.1-flash-lite-image"
+        assert kwargs["edit_mode"] == "inpaint_removal"
+
+    @pytest.mark.asyncio
+    @patch("pixelforge_mcp.server.get_api_client")
+    @patch("pixelforge_mcp.server.get_config")
+    async def test_invalid_mode_rejected_before_api_call(
+        self, mock_config, mock_get_client, tmp_path
+    ):
+        """Validation rejects an unknown mode without calling the client."""
+        mock_config.return_value.storage.output_dir = tmp_path
+        image = tmp_path / "photo.png"
+        image.touch()
+        client = _advanced_edit_client()
+        mock_get_client.return_value = client
+
+        result = await server_module.advanced_edit(
+            image_path=str(image), prompt="edit", edit_mode="erase"
+        )
+
+        assert result["success"] is False
+        assert result["message"].startswith("Invalid input")
+        assert "Invalid edit mode" in result["message"]
+        client.advanced_edit.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("pixelforge_mcp.server.get_api_client")
+    @patch("pixelforge_mcp.server.get_config")
+    async def test_client_error_reaches_response(
+        self, mock_config, mock_get_client, tmp_path
+    ):
+        """A failed client result is reported verbatim."""
+        mock_config.return_value.storage.output_dir = tmp_path
+        image = tmp_path / "photo.png"
+        image.touch()
+        client = Mock()
+        client.advanced_edit = AsyncMock(
+            return_value=GenerationResult(
+                success=False,
+                output="",
+                error="No image returned (finish_reason=IMAGE_SAFETY)",
+            )
+        )
+        mock_get_client.return_value = client
+
+        result = await server_module.advanced_edit(
+            image_path=str(image), prompt="edit", edit_mode="outpaint"
+        )
+
+        assert result["success"] is False
+        assert result["message"] == "No image returned (finish_reason=IMAGE_SAFETY)"
 
 
 class TestToolCount:

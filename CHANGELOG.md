@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Vertex AI backend for every tool: set `GOOGLE_CLOUD_PROJECT` with Application Default Credentials (`GOOGLE_APPLICATION_CREDENTIALS` for a service account); `GOOGLE_GENAI_USE_VERTEXAI=true` (or `GOOGLE_GENAI_USE_ENTERPRISE=true`) prefers it over an API key
+- `model` override on `upscale_image` and `advanced_edit`
+- Retry with exponential backoff on 408/429/5xx responses
+- `backend` block in `get_server_info`
+- ADR-003 documenting the Vertex AI backend and generative upscale
+
+### Changed
+
+- `upscale_image` and `advanced_edit` re-render with a Gemini image model (`gemini-nano-banana-2.1` by default) instead of the retired Imagen models; responses carry `model`, `method`, `image_size`, and `warnings`
+- `upscale_image` outputs the smallest of 1K/2K/4K that covers the source times the factor, capped at 4K; `gemini-3.1-flash-lite-image` (1K only) is rejected
+- `advanced_edit` passes an optional mask to the model as guidance; the edited region is not pixel-exact
+- Vertex AI default location is `global`; `GOOGLE_CLOUD_LOCATION` overrides it
+- `0.5K` is sent to the API as `512px`
+- `generate_image` rejects image sizes the chosen model cannot output, including through quality presets (`quality="fast"` with 2K or 4K)
+- `upscale_image` and `advanced_edit` use the nearest aspect ratio the model supports; models without panoramic output get a standard ratio and a warning
+- API errors keep Google's text: 429 and 403 responses name the quota or permission problem, and a Vertex AI 404 at `global` points at the model ID rather than the location
+- The Gemini API client is created with `vertexai=False`, so the SDK's `GOOGLE_GENAI_USE_VERTEXAI` / `GOOGLE_GENAI_USE_ENTERPRISE` switches cannot reroute an API key
+- CI actions updated to v7; the integration job masks the project number and runs pytest with `--show-capture=no`
+- The `vertex` extra is empty; no extra packages are needed for Vertex AI
+
+### Fixed
+
+- `upscale_image` and `advanced_edit` returned 404 because the Imagen models they relied on were retired by Google
+- `TypeError` when a response has no parts, for example after an image safety stop; the error now names the finish reason
+- Undecodable image bytes in a response are reported as such instead of surfacing a PIL error
+- Vertex AI "Publisher model ... was not found" errors (either casing) now suggest `GOOGLE_CLOUD_LOCATION=global` for regional locations
+
 ## [0.6.0] - 2026-10-28
 
 ### Added

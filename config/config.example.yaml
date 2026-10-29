@@ -31,6 +31,25 @@ storage:
 # Server configuration
 server:
   name: "pixelforge-mcp"
-  version: "0.1.4"
+  version: "0.6.0"
   log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR
   timeout: 120  # CLI command timeout in seconds
+
+# Vertex AI backend (optional). Every tool can run through Vertex AI instead
+# of an API key. Credentials come from Application Default Credentials
+# (GOOGLE_APPLICATION_CREDENTIALS or `gcloud auth application-default login`).
+vertex:
+  # Google Cloud project ID (can also set via GOOGLE_CLOUD_PROJECT)
+  project_id: null
+
+  # Use the project above. GOOGLE_CLOUD_PROJECT sets this automatically.
+  enabled: false
+
+  # Vertex AI location (can also set via GOOGLE_CLOUD_LOCATION).
+  # The current Gemini image and text models are served from the global endpoint.
+  location: "global"
+
+  # Use Vertex AI even when an API key is also configured (can also set via
+  # GOOGLE_GENAI_USE_VERTEXAI=true or GOOGLE_GENAI_USE_ENTERPRISE=true).
+  # Otherwise the API key wins.
+  prefer: false

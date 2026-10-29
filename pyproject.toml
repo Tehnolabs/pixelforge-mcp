@@ -34,15 +34,16 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
-    "pytest-asyncio>=0.21.0",
+    "pytest-asyncio>=0.24.0",
     "black>=23.0.0",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
     "types-PyYAML>=6.0.12",
 ]
-vertex = [
-    "google-cloud-aiplatform>=1.38.0",
-]
+# Kept for compatibility with `pip install pixelforge-mcp[vertex]`.
+# The Vertex AI backend needs no extra packages: google-genai talks to
+# Vertex AI directly using Application Default Credentials.
+vertex = []
 
 [project.urls]
 Homepage = "https://github.com/tehnolabs/pixelforge-mcp"

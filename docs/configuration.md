@@ -118,6 +118,42 @@ PixelForge checks these variables for your Google API key (in order):
 
 Get a key at [Google AI Studio](https://aistudio.google.com/apikey). Ensure the key has Gemini API access enabled.
 
+### Vertex AI backend
+
+Every tool can also run through Vertex AI. Use a Google Cloud project with the Vertex AI API enabled and provide [Application Default Credentials](https://cloud.google.com/docs/authentication/application-default-credentials): a service account key file, `gcloud auth application-default login`, or the attached identity when running on Google Cloud. The identity needs the Vertex AI User role (`roles/aiplatform.user`). No extra packages are required.
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `GOOGLE_CLOUD_PROJECT` | — | Project ID. Setting it enables the Vertex AI backend |
+| `GOOGLE_APPLICATION_CREDENTIALS` | — | Path to a service account key file. Not needed with another ADC source |
+| `GOOGLE_CLOUD_LOCATION` | `global` | Vertex AI location. The current Gemini image and text models are served from the global endpoint |
+| `GOOGLE_GENAI_USE_VERTEXAI` | `false` | `true` to use Vertex AI even when an API key is also set (`GOOGLE_GENAI_USE_ENTERPRISE` is accepted as well) |
+
+Example client entry:
+
+```json
+{
+  "mcpServers": {
+    "pixelforge": {
+      "command": "pixelforge-mcp",
+      "env": {
+        "GOOGLE_CLOUD_PROJECT": "my-project",
+        "GOOGLE_APPLICATION_CREDENTIALS": "/path/to/service-account.json",
+        "GOOGLE_CLOUD_LOCATION": "global"
+      }
+    }
+  }
+}
+```
+
+### Backend selection
+
+- An API key selects the Gemini API.
+- `GOOGLE_CLOUD_PROJECT` with no API key selects Vertex AI.
+- Both set: the API key wins unless `GOOGLE_GENAI_USE_VERTEXAI=true`.
+
+`get_server_info` reports the active backend under `backend.name` (`gemini_api` or `vertex_ai`). The `pixelforge-mcp[vertex]` extra is kept for compatibility and installs nothing.
+
 ## Optional: YAML Configuration File
 
 For advanced settings, create `config/config.yaml`:
@@ -134,11 +170,17 @@ storage:
 
 server:
   name: "pixelforge-mcp"
-  version: "0.1.4"
+  version: "0.6.0"
   log_level: "INFO"
+
+vertex:
+  project_id: null      # or GOOGLE_CLOUD_PROJECT
+  enabled: false        # true to use project_id above (set automatically by GOOGLE_CLOUD_PROJECT)
+  location: "global"    # or GOOGLE_CLOUD_LOCATION
+  prefer: false         # true to use Vertex AI even when an API key is set
 ```
 
-Environment variables always override YAML values.
+In YAML, `project_id` selects Vertex AI only together with `enabled: true`; the `GOOGLE_CLOUD_PROJECT` variable sets both. Environment variables always override YAML values.
 
 ## Troubleshooting
 
@@ -158,6 +200,21 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 - Verify your key at [Google AI Studio](https://aistudio.google.com/apikey)
 - Ensure Gemini API access is enabled on the key
 - Check the environment variable is set: `echo $GOOGLE_API_KEY`
+
+**"Publisher model ... was not found" (Vertex AI)**
+
+- With a regional location in the message, the request went to a regional Vertex AI endpoint. The current Gemini image and text models are served from the global endpoint: set `GOOGLE_CLOUD_LOCATION=global` (the default) or remove a regional override
+- With `locations/global` in the message, the model ID is unknown or retired on Vertex AI (`list_available_models` lists current IDs), or the project cannot access it yet
+- The same 404 is returned for retired Imagen model IDs, which PixelForge no longer calls
+
+**"Rate limit exceeded" or "Permission denied"**
+
+- The message carries Google's own text. A quota `limit: 0` or "has not been used in project ... or it is disabled" is a project setup limit, not a model problem
+- Enable the Vertex AI API (or the Generative Language API for an API key), grant `roles/aiplatform.user`, or request a quota increase
+
+**"No credentials found"**
+
+- Set an API key, or `GOOGLE_CLOUD_PROJECT` with Application Default Credentials (see [Vertex AI backend](#vertex-ai-backend))
 
 **MCP server not connecting**
 

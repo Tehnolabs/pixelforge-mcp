@@ -24,9 +24,66 @@ ASPECT_RATIOS = [
     "8:1",
 ]
 
-# Supported image sizes (maps to google-genai ImageConfig.image_size).
-# Per-model support varies; the Gemini API validates the combination.
+# Ratios wider or taller than 21:9. Only some models honour them.
+PANORAMIC_RATIOS = ["1:4", "4:1", "1:8", "8:1"]
+
+# Models that honour the panoramic ratios (Gemini API docs, 2026-10). Other
+# known models render a standard shape instead of failing.
+PANORAMIC_MODELS = {"gemini-nano-banana-2.1", "gemini-3.1-flash-image"}
+
+# Supported image sizes as exposed by the tools.
 IMAGE_SIZES = ["0.5K", "1K", "2K", "4K"]
+
+# Values the API expects for ImageConfig.image_size. Google documents the
+# smallest tier as "512px"; "0.5K" is rejected by Vertex AI.
+SDK_IMAGE_SIZE_VALUES: Dict[str, str] = {
+    "0.5K": "512px",
+    "1K": "1K",
+    "2K": "2K",
+    "4K": "4K",
+}
+
+# Longest output edge in pixels per size tier.
+IMAGE_SIZE_PIXELS: Dict[str, int] = {
+    "0.5K": 512,
+    "1K": 1024,
+    "2K": 2048,
+    "4K": 4096,
+}
+
+# Sizes each model can output (Google model cards, 2026-10).
+MODEL_IMAGE_SIZES: Dict[str, List[str]] = {
+    "gemini-nano-banana-2.1": ["1K", "2K", "4K"],
+    "gemini-3.1-flash-lite-image": ["1K"],
+    "gemini-3.1-flash-image": ["0.5K", "1K", "2K", "4K"],
+    "gemini-3-pro-image": ["1K", "2K", "4K"],
+    "gemini-2.5-flash-image": ["1K"],
+}
+
+
+def supported_image_sizes(model: str) -> Optional[List[str]]:
+    """Return the sizes a known model supports, or None for unknown models."""
+    return MODEL_IMAGE_SIZES.get(model)
+
+
+def check_model_image_size(model: Optional[str], image_size: Optional[str]) -> None:
+    """Raise ValueError when a known model cannot output the requested size."""
+    if not model or not image_size:
+        return
+    sizes = supported_image_sizes(model)
+    if sizes is not None and image_size not in sizes:
+        raise ValueError(
+            f"{model} cannot output {image_size}. "
+            f"Supported sizes: {', '.join(sizes)}"
+        )
+
+
+def supported_aspect_ratios(model: Optional[str]) -> List[str]:
+    """Return the ratios a model honours; unknown models get the full list."""
+    if model is None or model not in IMAGE_MODELS or model in PANORAMIC_MODELS:
+        return list(ASPECT_RATIOS)
+    return [ratio for ratio in ASPECT_RATIOS if ratio not in PANORAMIC_RATIOS]
+
 
 # Supported output formats
 OUTPUT_FORMATS = ["png", "jpeg", "webp"]
@@ -356,6 +413,15 @@ class GenerateImageInput(BaseModel):
             raise ValueError(
                 "'quality' and 'model' are mutually " "exclusive. Use one or the other."
             )
+        # Check the model and size the server will send: a preset fixes the
+        # model and may leave the caller's image_size in place.
+        model = self.model
+        image_size = self.image_size
+        if self.quality:
+            preset = QUALITY_PRESETS[self.quality]
+            model = preset["model"]
+            image_size = preset["image_size"] or self.image_size
+        check_model_image_size(model, image_size)
         return self
 
 
@@ -737,15 +803,33 @@ class ApplyTemplateInput(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Vertex AI tools (optional, requires google-cloud-aiplatform)
+# Generative upscale and mode-driven editing
 # ---------------------------------------------------------------------------
 
 
+UPSCALE_FACTORS: Dict[str, int] = {"x2": 2, "x4": 4}
+
+
+def _validate_generative_model(v: Optional[str]) -> Optional[str]:
+    """Normalise an optional model override (blank means default)."""
+    if v is None:
+        return v
+    v = v.strip()
+    if not v:
+        return None
+    return v
+
+
 class UpscaleImageInput(BaseModel):
-    """Input validation for image upscaling (Vertex AI only)."""
+    """Input validation for generative image upscaling."""
 
     image_path: str = Field(..., description="Path to the image to upscale")
     upscale_factor: str = Field("x2", description="Upscale factor: 'x2' or 'x4'")
+    model: Optional[str] = Field(
+        None,
+        description=f"Image model to re-render with (default: {DEFAULT_MODEL}). "
+        "Must support 2K/4K output.",
+    )
     output_filename: Optional[str] = Field(None, description="Custom output filename")
     output_format: str = Field("png", description="Output format")
 
@@ -758,8 +842,22 @@ class UpscaleImageInput(BaseModel):
     @classmethod
     def validate_upscale_factor(cls, v: str) -> str:
         v = v.lower()
-        if v not in ("x2", "x4"):
+        if v not in UPSCALE_FACTORS:
             raise ValueError("Upscale factor must be 'x2' or 'x4'")
+        return v
+
+    @field_validator("model")
+    @classmethod
+    def validate_model(cls, v: Optional[str]) -> Optional[str]:
+        v = _validate_generative_model(v)
+        if v is None:
+            return v
+        sizes = supported_image_sizes(v)
+        if sizes is not None and sizes == ["1K"]:
+            raise ValueError(
+                f"{v} outputs 1K only and cannot upscale. "
+                f"Use {DEFAULT_MODEL} or gemini-3-pro-image."
+            )
         return v
 
     @field_validator("output_filename")
@@ -784,7 +882,7 @@ ADVANCED_EDIT_MODES = [
 
 
 class AdvancedEditInput(BaseModel):
-    """Input validation for advanced editing (Vertex AI only)."""
+    """Input validation for mode-driven editing with a Gemini image model."""
 
     image_path: str = Field(..., description="Path to the image to edit")
     prompt: str = Field(..., description="Edit instruction")
@@ -794,7 +892,12 @@ class AdvancedEditInput(BaseModel):
         "outpaint, background_swap, style_transfer, product_image",
     )
     mask_path: Optional[str] = Field(
-        None, description="Path to mask image (for inpainting)"
+        None,
+        description="Optional mask image. White marks the region to change. "
+        "It guides the model; the boundary is not pixel-exact.",
+    )
+    model: Optional[str] = Field(
+        None, description=f"Image model to use (default: {DEFAULT_MODEL})"
     )
     output_filename: Optional[str] = Field(None, description="Custom output filename")
     output_format: str = Field("png", description="Output format")
@@ -803,6 +906,18 @@ class AdvancedEditInput(BaseModel):
     @classmethod
     def validate_image_path(cls, v: str) -> str:
         return _validate_image_path(v)
+
+    @field_validator("mask_path")
+    @classmethod
+    def validate_mask_path(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        return _validate_image_path(v)
+
+    @field_validator("model")
+    @classmethod
+    def validate_model(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_generative_model(v)
 
     @field_validator("prompt")
     @classmethod

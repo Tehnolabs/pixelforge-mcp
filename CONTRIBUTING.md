@@ -35,15 +35,50 @@ mypy src/
 ## Running Tests
 
 ```bash
-# Run all unit tests
+# Unit tests (no credentials needed)
 pytest tests/unit/ -v
 
-# Run a specific test file
+# A specific test file
 pytest tests/unit/test_config.py -v
 
-# Run integration tests (requires GOOGLE_API_KEY)
-pytest tests/integration/ -v
+# Integration tests (live API calls; skipped without credentials)
+pytest tests/integration -q -m integration
 ```
+
+### Integration tests
+
+`tests/integration/` calls the live Google APIs: one request per tool with the cheapest options, about six requests per run. Without credentials every integration test is skipped. Provide one of:
+
+```bash
+# Gemini API key
+export GOOGLE_API_KEY="your-api-key-here"
+
+# Vertex AI: a service-account key, or `gcloud auth application-default login`
+export GOOGLE_CLOUD_PROJECT="my-project"
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/key.json"
+export GOOGLE_CLOUD_LOCATION="global"
+```
+
+When both are set the API key wins unless `GOOGLE_GENAI_USE_VERTEXAI=true`.
+
+## Continuous Integration
+
+`.github/workflows/ci.yml` runs two jobs:
+
+| Job | Runs on | What it does |
+|-----|---------|--------------|
+| `test` | every push and pull request | ruff, black, mypy, unit tests on Python 3.10, 3.12, 3.14 |
+| `integration` | push to `main`, `workflow_dispatch`, pull requests from branches in this repository | integration tests on Python 3.12 |
+
+The integration job uses one of these optional repository secrets. With neither set it prints a notice and passes.
+
+| Secret | Value |
+|--------|-------|
+| `GCP_SERVICE_ACCOUNT_KEY` | JSON key of a service account with the **Vertex AI User** role, stored as a single-line (minified) JSON string so GitHub's per-line secret masking covers it. Selects the Vertex AI backend with `GOOGLE_CLOUD_LOCATION=global`. |
+| `GCP_PROJECT_NUMBER` | Optional. The project number, masked in the log. The job also resolves it with `gcloud projects describe` when the service account may read the project. |
+| `GOOGLE_API_KEY` | Gemini API key. Used only when `GCP_SERVICE_ACCOUNT_KEY` is not set. |
+
+Pull requests from forks cannot read repository secrets, so they run the unit checks only. In Vertex mode the job masks the project ID, the project number, and the service account email in the log, and pytest runs with `--show-capture=no` so captured logs are not echoed on failure.
 
 ## Project Structure
 
