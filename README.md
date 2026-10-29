@@ -39,6 +39,8 @@ pipx install pixelforge-mcp
 
 ### Configure
 
+The examples below use a Gemini API key. To use a Google Cloud service account instead, replace `GOOGLE_API_KEY` with `GOOGLE_CLOUD_PROJECT` and `GOOGLE_APPLICATION_CREDENTIALS` as shown in [Use a service account instead of an API key](#use-a-service-account-instead-of-an-api-key).
+
 #### Claude Code
 
 ```bash
@@ -139,19 +141,58 @@ Use a Google Cloud project with the Vertex AI API enabled and [Application Defau
 | `GOOGLE_CLOUD_LOCATION` | Vertex AI location. Default `global`; the current Gemini image and text models are served from the global endpoint |
 | `GOOGLE_GENAI_USE_VERTEXAI` | `true` to use Vertex AI even when an API key is also set (`GOOGLE_GENAI_USE_ENTERPRISE` is accepted as well) |
 
+### Use a service account instead of an API key
+
+A service account runs every tool through Vertex AI, with no Gemini API key. One-time setup with the [gcloud CLI](https://cloud.google.com/sdk/docs/install), using your own project ID:
+
+```bash
+PROJECT_ID="YOUR_PROJECT_ID"
+SA="pixelforge-sa@${PROJECT_ID}.iam.gserviceaccount.com"
+
+# 1. Enable Vertex AI in the project
+gcloud services enable aiplatform.googleapis.com --project="$PROJECT_ID"
+
+# 2. Create the service account and grant it the Vertex AI User role
+gcloud iam service-accounts create pixelforge-sa --project="$PROJECT_ID"
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:$SA" --role="roles/aiplatform.user"
+
+# 3. Create a key file outside any repository
+mkdir -p ~/.config/pixelforge
+gcloud iam service-accounts keys create ~/.config/pixelforge/service-account.json \
+  --iam-account="$SA"
+```
+
+Then configure your client with the project and the key path in place of `GOOGLE_API_KEY`. Claude Code:
+
+```bash
+claude mcp add pixelforge --scope user \
+  -e GOOGLE_CLOUD_PROJECT="YOUR_PROJECT_ID" \
+  -e GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/pixelforge/service-account.json" \
+  -- pixelforge-mcp
+```
+
+Cursor, Windsurf, Claude Desktop and other JSON-configured clients take the same two variables in the `env` block:
+
 ```json
 {
   "mcpServers": {
     "pixelforge": {
       "command": "pixelforge-mcp",
       "env": {
-        "GOOGLE_CLOUD_PROJECT": "my-project",
-        "GOOGLE_APPLICATION_CREDENTIALS": "/path/to/service-account.json"
+        "GOOGLE_CLOUD_PROJECT": "YOUR_PROJECT_ID",
+        "GOOGLE_APPLICATION_CREDENTIALS": "/absolute/path/to/service-account.json"
       }
     }
   }
 }
 ```
+
+Verify by asking your client for `get_server_info`: `backend.name` should be `vertex_ai`. Commands for every client are in [docs/configuration.md](docs/configuration.md#use-a-service-account-instead-of-an-api-key).
+
+- An API key variable set anywhere in the environment (a shell profile, for example) takes precedence, and the service account is ignored. Unset it, or add `"GOOGLE_GENAI_USE_VERTEXAI": "true"` to the same `env` block.
+- The key file grants access to your project. Keep it out of version control, give the service account only `roles/aiplatform.user`, and delete keys you no longer use (`gcloud iam service-accounts keys list --iam-account="$SA"`).
+- No key file is needed when credentials come from `gcloud auth application-default login` (optionally with `--impersonate-service-account="$SA"`) or from the attached identity on Google Cloud. Set only `GOOGLE_CLOUD_PROJECT` in that case.
 
 ### Backend selection
 
@@ -267,7 +308,7 @@ generate_image(prompt="...", quality="quality")    # gemini-3-pro-image + 2K
 
 ### "Invalid API key" or "Authentication failed"
 
-Double-check your Google API key is correct and has access to the Gemini API. Get a key at [Google AI Studio](https://aistudio.google.com/apikey).
+Double-check your Google API key is correct and has access to the Gemini API. Get a key at [Google AI Studio](https://aistudio.google.com/apikey). If you meant to use a service account, an API key variable set anywhere in the environment takes precedence: unset it or set `GOOGLE_GENAI_USE_VERTEXAI=true`.
 
 ### "Command not found: pixelforge-mcp"
 
