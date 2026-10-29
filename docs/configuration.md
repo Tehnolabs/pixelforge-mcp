@@ -170,7 +170,7 @@ storage:
 
 server:
   name: "pixelforge-mcp"
-  version: "0.6.0"
+  version: "0.7.0"
   log_level: "INFO"
 
 vertex:

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-29
+
 ### Added
 
 - Vertex AI backend for every tool: set `GOOGLE_CLOUD_PROJECT` with Application Default Credentials (`GOOGLE_APPLICATION_CREDENTIALS` for a service account); `GOOGLE_GENAI_USE_VERTEXAI=true` (or `GOOGLE_GENAI_USE_ENTERPRISE=true`) prefers it over an API key
@@ -202,7 +204,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 72 unit tests with full coverage
 - PyPI package distribution via pipx
 
-[Unreleased]: https://github.com/tehnolabs/pixelforge-mcp/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/tehnolabs/pixelforge-mcp/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/tehnolabs/pixelforge-mcp/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/tehnolabs/pixelforge-mcp/compare/v0.5.4...v0.6.0
 [0.5.4]: https://github.com/tehnolabs/pixelforge-mcp/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/tehnolabs/pixelforge-mcp/compare/v0.5.2...v0.5.3
