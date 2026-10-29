@@ -77,6 +77,27 @@ jobs:
             echo "mode=none" >> "$GITHUB_OUTPUT"
           fi
 
+      # Masks must be registered before the auth step exports the project
+      # variables: every later step echoes its environment into the log.
+      # The key JSON holds the project ID and the service account email but
+      # not the project number, which Google's 403/429 text uses; that comes
+      # from the optional GCP_PROJECT_NUMBER secret.
+      - name: Mask project identifiers
+        if: steps.creds.outputs.mode == 'vertex'
+        env:
+          GCP_SERVICE_ACCOUNT_KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+          GCP_PROJECT_NUMBER: ${{ secrets.GCP_PROJECT_NUMBER }}
+        run: |
+          for field in project_id client_email; do
+            value="$(jq -r --arg f "$field" '.[$f] // empty' <<< "$GCP_SERVICE_ACCOUNT_KEY")"
+            if [ -n "$value" ]; then
+              echo "::add-mask::$value"
+            fi
+          done
+          if [ -n "$GCP_PROJECT_NUMBER" ]; then
+            echo "::add-mask::$GCP_PROJECT_NUMBER"
+          fi
+
       # Exports GOOGLE_CLOUD_PROJECT and GOOGLE_APPLICATION_CREDENTIALS,
       # which select the Vertex AI backend.
       - name: Authenticate to Google Cloud
@@ -85,27 +106,15 @@ jobs:
         with:
           credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
 
-      # The key file holds the project ID and the service account email but
-      # no project number, which Google's 403/429 text uses to name the
-      # project. The number comes from gcloud (when the service account may
-      # read the project) or from the optional GCP_PROJECT_NUMBER secret.
-      - name: Mask project identifiers
+      # Fallback when no project number secret is set and the service
+      # account may read the project.
+      - name: Mask project number
         if: steps.creds.outputs.mode == 'vertex'
-        env:
-          GCP_PROJECT_NUMBER: ${{ secrets.GCP_PROJECT_NUMBER }}
         run: |
-          for field in project_id client_email; do
-            value="$(jq -r --arg f "$field" '.[$f] // empty' "$GOOGLE_APPLICATION_CREDENTIALS")"
-            if [ -n "$value" ]; then
-              echo "::add-mask::$value"
-            fi
-          done
           number="$(gcloud projects describe "$GOOGLE_CLOUD_PROJECT" --format='value(projectNumber)' 2>/dev/null || true)"
-          for value in "$number" "$GCP_PROJECT_NUMBER"; do
-            if [ -n "$value" ]; then
-              echo "::add-mask::$value"
-            fi
-          done
+          if [ -n "$number" ]; then
+            echo "::add-mask::$number"
+          fi
 
       # --show-capture=no keeps captured logs out of the job log on failure;
       # only the assertion message is printed.
