@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Retry with exponential backoff on 408/429/5xx responses
 - `backend` block in `get_server_info`
 - ADR-003 documenting the Vertex AI backend and generative upscale
+- Service account setup guide (gcloud steps and per-client configuration) in the README, `docs/configuration.md` and AGENTS.md
 
 ### Changed
 
@@ -37,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `TypeError` when a response has no parts, for example after an image safety stop; the error now names the finish reason
 - Undecodable image bytes in a response are reported as such instead of surfacing a PIL error
 - Vertex AI "Publisher model ... was not found" errors (either casing) now suggest `GOOGLE_CLOUD_LOCATION=global` for regional locations
+- `/gemini-review` finished without posting a review: the workflow now passes the PR number, repository and context to the Gemini CLI with workflow expressions and uploads the CLI output as an artifact
 
 ## [0.6.0] - 2026-10-28
 
