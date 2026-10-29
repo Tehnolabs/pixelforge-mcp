@@ -4,15 +4,25 @@ import io
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-from google.genai import types
+from google.genai import errors, types
 from PIL import Image
 
 from pixelforge_mcp.utils.api_client import (
+    BACKEND_GEMINI_API,
+    BACKEND_VERTEX_AI,
     COMPARE_IMAGES_PROMPT,
+    DEFAULT_VERTEX_LOCATION,
+    EDIT_MODE_INSTRUCTIONS,
+    GENERATIVE_UPSCALE_WARNING,
+    MASK_GUIDANCE_WARNING,
+    MASK_INSTRUCTION,
     OCR_PROMPT,
     PILLOW_FORMAT_MAP,
+    RETRY_ATTEMPTS,
+    RETRY_STATUS_CODES,
     SAFETY_PRESETS,
     TEXT_MODEL,
+    UPSCALE_INSTRUCTION,
     GenerationResult,
     ImagenAPIClient,
 )
@@ -21,7 +31,56 @@ from pixelforge_mcp.utils.validation import (
     DEPRECATED_MODEL_ALIASES,
     IMAGE_MODELS,
     RETIRED_MODELS,
+    supported_aspect_ratios,
 )
+
+CREDENTIAL_ENV_VARS = (
+    "GOOGLE_API_KEY",
+    "GOOGLE_GENERATIVE_AI_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_CLOUD_LOCATION",
+    "GOOGLE_GENAI_USE_VERTEXAI",
+    "GOOGLE_GENAI_USE_ENTERPRISE",
+)
+
+
+def _png_bytes(size=(10, 10), color="red"):
+    """Encode a solid-colour PNG and return its bytes."""
+    buf = io.BytesIO()
+    Image.new("RGB", size, color=color).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _image_response(img_bytes):
+    """Build a generate_content response carrying one inline image."""
+    part = Mock()
+    part.inline_data = Mock(data=img_bytes)
+    candidate = Mock()
+    candidate.content.parts = [part]
+    candidate.finish_reason = types.FinishReason.STOP
+    response = Mock(candidates=[candidate])
+    response.prompt_feedback = None
+    return response
+
+
+def _no_image_response(finish_reason=types.FinishReason.IMAGE_SAFETY, parts=None):
+    """Build a generate_content response without an image."""
+    candidate = Mock()
+    candidate.content.parts = parts
+    candidate.finish_reason = finish_reason
+    response = Mock(candidates=[candidate])
+    response.prompt_feedback = None
+    return response
+
+
+def _client_returning(response):
+    """Return (ImagenAPIClient, mock genai client) for a canned response."""
+    mock_client = Mock()
+    mock_client.aio.models.generate_content = AsyncMock(return_value=response)
+    client = ImagenAPIClient(api_key="test-key")
+    client._genai_client = mock_client
+    return client, mock_client
 
 
 class TestGenerationResult:
@@ -114,23 +173,17 @@ class TestImagenAPIClient:
 
     @pytest.mark.asyncio
     async def test_generate_failure_no_images(self, tmp_path):
-        """Test generation failure when no images in response."""
-        mock_candidate = Mock()
-        mock_candidate.content.parts = []
-        mock_response = Mock(candidates=[mock_candidate])
-        mock_response.prompt_feedback = None
-
-        mock_client = Mock()
-        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
-
-        client = ImagenAPIClient(api_key="test-key")
-        client._genai_client = mock_client
+        """A response without an image reports the finish reason."""
+        client, _ = _client_returning(
+            _no_image_response(types.FinishReason.IMAGE_SAFETY, parts=[])
+        )
         output_path = tmp_path / "test.png"
 
         result = await client.generate(prompt="test", output_path=output_path)
 
         assert result.success is False
-        assert result.error == "No images generated"
+        assert result.error == "No image returned (finish_reason=IMAGE_SAFETY)"
+        assert not output_path.exists()
 
     @pytest.mark.asyncio
     async def test_generate_exception(self, tmp_path):
@@ -194,17 +247,10 @@ class TestImagenAPIClient:
 
     @pytest.mark.asyncio
     async def test_edit_failure(self, tmp_path):
-        """Test failed image editing when response has no inline_data."""
-        mock_candidate = Mock()
-        mock_candidate.content.parts = []
-        mock_response = Mock(candidates=[mock_candidate])
-        mock_response.prompt_feedback = None
-
-        mock_client = Mock()
-        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
-
-        client = ImagenAPIClient(api_key="test-key")
-        client._genai_client = mock_client
+        """An edit response without an image reports the finish reason."""
+        client, _ = _client_returning(
+            _no_image_response(types.FinishReason.NO_IMAGE, parts=[])
+        )
 
         input_path = tmp_path / "input.png"
         Image.new("RGB", (10, 10)).save(str(input_path))
@@ -215,7 +261,8 @@ class TestImagenAPIClient:
         )
 
         assert result.success is False
-        assert result.error == "No images generated"
+        assert result.error == "No image returned (finish_reason=NO_IMAGE)"
+        assert not output_path.exists()
 
     @pytest.mark.asyncio
     async def test_analyze_success(self, tmp_path):
@@ -1128,17 +1175,10 @@ class TestRemoveBackground:
 
     @pytest.mark.asyncio
     async def test_remove_bg_failure(self, tmp_path):
-        """Test background removal with no images in response."""
-        mock_candidate = Mock()
-        mock_candidate.content.parts = []
-        mock_response = Mock(candidates=[mock_candidate])
-        mock_response.prompt_feedback = None
-
-        mock_client = Mock()
-        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
-
-        client = ImagenAPIClient(api_key="test-key")
-        client._genai_client = mock_client
+        """A response without an image passes the edit error through."""
+        client, _ = _client_returning(
+            _no_image_response(types.FinishReason.IMAGE_SAFETY, parts=[])
+        )
 
         image_path = tmp_path / "input.png"
         Image.new("RGB", (10, 10)).save(str(image_path))
@@ -1147,7 +1187,8 @@ class TestRemoveBackground:
         result = await client.remove_background(image_path, output_path)
 
         assert result.success is False
-        assert result.error == "Background removal failed"
+        assert result.error == "No image returned (finish_reason=IMAGE_SAFETY)"
+        assert result.data is None
 
     @pytest.mark.asyncio
     async def test_remove_bg_exception(self, tmp_path):
@@ -1387,149 +1428,268 @@ class TestPersonGenerationWarnOnly:
 
 
 class TestAdvancedEdit:
-    """Tests for advanced_edit via the Vertex AI EditImage API."""
+    """Tests for mode-driven editing via generate_content."""
 
     @staticmethod
-    def _write_png(path, color):
-        """Write a small real PNG and return its bytes."""
-        buf = io.BytesIO()
-        Image.new("RGB", (10, 10), color=color).save(buf, format="PNG")
-        path.write_bytes(buf.getvalue())
-        return buf.getvalue()
-
-    @staticmethod
-    def _vertex_client_returning_image(result_bytes):
-        """Build a mock Vertex client whose edit_image returns one image."""
-        mock_generated = Mock()
-        mock_generated.image = Mock(image_bytes=result_bytes)
-        mock_response = Mock()
-        mock_response.generated_images = [mock_generated]
-
-        mock_client = Mock()
-        mock_client.models.edit_image = Mock(return_value=mock_response)
-        return mock_client
+    def _write_png(path, size=(10, 10), color="red"):
+        """Write a small real PNG to ``path``."""
+        Image.new("RGB", size, color=color).save(str(path))
 
     @pytest.mark.asyncio
-    async def test_advanced_edit_with_mask_builds_sdk_references(self, tmp_path):
-        """Mask edits send two SDK reference images with a user-provided mask."""
+    @pytest.mark.parametrize("mode", sorted(EDIT_MODE_INSTRUCTIONS))
+    async def test_mode_template_wraps_prompt(self, tmp_path, mode):
+        """Each mode sends the source image plus its instruction template."""
         image_path = tmp_path / "input.png"
-        mask_path = tmp_path / "mask.png"
-        raw_bytes = self._write_png(image_path, "red")
-        mask_bytes = self._write_png(mask_path, "white")
-        result_bytes = self._write_png(tmp_path / "result.png", "green")
-        mock_client = self._vertex_client_returning_image(result_bytes)
+        self._write_png(image_path)
         output_path = tmp_path / "edited.png"
+        client, mock_client = _client_returning(_image_response(_png_bytes()))
 
-        client = ImagenAPIClient(api_key="test-key")
-        with patch.object(client, "_get_vertex_client", return_value=mock_client):
-            result = await client.advanced_edit(
-                image_path=image_path,
-                prompt="remove the object",
-                edit_mode="inpaint_removal",
-                output_path=output_path,
-                mask_path=mask_path,
-            )
+        result = await client.advanced_edit(
+            image_path=image_path,
+            prompt="a red balloon",
+            edit_mode=mode,
+            output_path=output_path,
+        )
 
         assert result.success is True
         assert output_path.exists()
-
-        mock_client.models.edit_image.assert_called_once()
-        kwargs = mock_client.models.edit_image.call_args.kwargs
-        assert kwargs["prompt"] == "remove the object"
-
-        raw_ref, mask_ref = kwargs["reference_images"]
-        assert isinstance(raw_ref, types.RawReferenceImage)
-        assert raw_ref.reference_id == 0
-        assert isinstance(raw_ref.reference_image, types.Image)
-        assert raw_ref.reference_image.image_bytes == raw_bytes
-
-        assert isinstance(mask_ref, types.MaskReferenceImage)
-        assert mask_ref.reference_id == 1
-        assert isinstance(mask_ref.reference_image, types.Image)
-        assert mask_ref.reference_image.image_bytes == mask_bytes
-        assert mask_ref.config is not None
-        assert (
-            mask_ref.config.mask_mode == types.MaskReferenceMode.MASK_MODE_USER_PROVIDED
+        mock_client.aio.models.generate_content.assert_awaited_once()
+        kwargs = mock_client.aio.models.generate_content.call_args.kwargs
+        assert kwargs["model"] == "gemini-nano-banana-2.1"
+        source, instruction = kwargs["contents"]
+        assert isinstance(source, Image.Image)
+        assert instruction == EDIT_MODE_INSTRUCTIONS[mode].format(
+            prompt="a red balloon"
         )
+        assert "a red balloon" in instruction
 
-        config = kwargs["config"]
-        assert isinstance(config.edit_mode, types.EditMode)
-        assert config.edit_mode == types.EditMode.EDIT_MODE_INPAINT_REMOVAL
+        data = result.data
+        assert data["edit_mode"] == mode
+        assert data["model"] == "gemini-nano-banana-2.1"
+        assert data["method"] == "generative"
+        assert data["mask_used"] is False
+        assert data["image_size"] == "1K"
+        assert data["image_path"] == str(output_path)
+        assert "warnings" not in data
 
     @pytest.mark.asyncio
-    async def test_advanced_edit_without_mask_sends_only_raw_image(self, tmp_path):
-        """Edits without a mask send a single raw reference image."""
+    async def test_mask_is_second_image_followed_by_instruction(self, tmp_path):
+        """A mask goes after the source image, then the mask instruction."""
         image_path = tmp_path / "input.png"
-        self._write_png(image_path, "red")
-        result_bytes = self._write_png(tmp_path / "result.png", "green")
-        mock_client = self._vertex_client_returning_image(result_bytes)
+        mask_path = tmp_path / "mask.png"
+        self._write_png(image_path)
+        self._write_png(mask_path, color="white")
+        client, mock_client = _client_returning(_image_response(_png_bytes()))
 
-        client = ImagenAPIClient(api_key="test-key")
-        with patch.object(client, "_get_vertex_client", return_value=mock_client):
-            result = await client.advanced_edit(
-                image_path=image_path,
-                prompt="swap the background",
-                edit_mode="background_swap",
-                output_path=tmp_path / "edited.png",
-            )
+        result = await client.advanced_edit(
+            image_path=image_path,
+            prompt="the object",
+            edit_mode="inpaint_removal",
+            output_path=tmp_path / "edited.png",
+            mask_path=mask_path,
+        )
 
         assert result.success is True
-        kwargs = mock_client.models.edit_image.call_args.kwargs
-        assert len(kwargs["reference_images"]) == 1
-        assert isinstance(kwargs["reference_images"][0], types.RawReferenceImage)
-        assert kwargs["config"].edit_mode == types.EditMode.EDIT_MODE_BGSWAP
+        contents = mock_client.aio.models.generate_content.call_args.kwargs["contents"]
+        assert len(contents) == 4
+        assert isinstance(contents[0], Image.Image)
+        assert isinstance(contents[1], Image.Image)
+        assert contents[2] == MASK_INSTRUCTION
+        assert contents[3] == EDIT_MODE_INSTRUCTIONS["inpaint_removal"].format(
+            prompt="the object"
+        )
+        assert result.data["mask_used"] is True
+        assert result.data["warnings"] == [MASK_GUIDANCE_WARNING]
+
+    @pytest.mark.asyncio
+    async def test_outpaint_leaves_aspect_ratio_free(self, tmp_path):
+        """Outpainting must not pin the output to the source aspect ratio."""
+        image_path = tmp_path / "input.png"
+        self._write_png(image_path, size=(1600, 900))
+        client, mock_client = _client_returning(_image_response(_png_bytes()))
+
+        result = await client.advanced_edit(
+            image_path=image_path,
+            prompt="more sky",
+            edit_mode="outpaint",
+            output_path=tmp_path / "edited.png",
+        )
+
+        assert result.success is True
+        config = mock_client.aio.models.generate_content.call_args.kwargs["config"]
+        assert config.image_config.aspect_ratio is None
+        assert config.image_config.image_size == "2K"
+
+    @pytest.mark.asyncio
+    async def test_other_modes_pin_aspect_ratio_to_source(self, tmp_path):
+        """Non-outpaint modes keep the source's nearest supported ratio."""
+        image_path = tmp_path / "input.png"
+        self._write_png(image_path, size=(1600, 900))
+        client, mock_client = _client_returning(_image_response(_png_bytes()))
+
+        result = await client.advanced_edit(
+            image_path=image_path,
+            prompt="a beach",
+            edit_mode="background_swap",
+            output_path=tmp_path / "edited.png",
+        )
+
+        assert result.success is True
+        config = mock_client.aio.models.generate_content.call_args.kwargs["config"]
+        assert config.image_config.aspect_ratio == "16:9"
+        assert config.image_config.image_size == "2K"
+        assert config.response_modalities == ["IMAGE"]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "mode,expected",
+        "size,expected",
         [
-            ("inpaint_removal", types.EditMode.EDIT_MODE_INPAINT_REMOVAL),
-            ("inpaint_insertion", types.EditMode.EDIT_MODE_INPAINT_INSERTION),
-            ("outpaint", types.EditMode.EDIT_MODE_OUTPAINT),
-            ("background_swap", types.EditMode.EDIT_MODE_BGSWAP),
-            ("style_transfer", types.EditMode.EDIT_MODE_STYLE),
-            ("product_image", types.EditMode.EDIT_MODE_PRODUCT_IMAGE),
+            ((10, 10), "1K"),
+            ((1024, 10), "1K"),
+            ((1500, 10), "2K"),
+            ((10, 3000), "4K"),
         ],
     )
-    async def test_advanced_edit_maps_modes_to_sdk_enum(self, tmp_path, mode, expected):
-        """Every user-facing edit mode maps to an SDK EditMode member."""
+    async def test_image_size_matches_source_tier(self, tmp_path, size, expected):
+        """The output tier is the smallest that covers the source's long edge."""
         image_path = tmp_path / "input.png"
-        self._write_png(image_path, "red")
-        result_bytes = self._write_png(tmp_path / "result.png", "green")
-        mock_client = self._vertex_client_returning_image(result_bytes)
+        self._write_png(image_path, size=size)
+        client, mock_client = _client_returning(_image_response(_png_bytes()))
 
-        client = ImagenAPIClient(api_key="test-key")
-        with patch.object(client, "_get_vertex_client", return_value=mock_client):
-            result = await client.advanced_edit(
-                image_path=image_path,
-                prompt="edit",
-                edit_mode=mode,
-                output_path=tmp_path / "edited.png",
-            )
+        result = await client.advanced_edit(
+            image_path=image_path,
+            prompt="a hat",
+            edit_mode="inpaint_insertion",
+            output_path=tmp_path / "edited.png",
+        )
 
         assert result.success is True
-        config = mock_client.models.edit_image.call_args.kwargs["config"]
-        assert config.edit_mode == expected
+        config = mock_client.aio.models.generate_content.call_args.kwargs["config"]
+        assert config.image_config.image_size == expected
+        assert result.data["image_size"] == expected
 
     @pytest.mark.asyncio
-    async def test_advanced_edit_unknown_mode_fails_without_api_call(self, tmp_path):
+    async def test_lite_model_drops_to_1k(self, tmp_path):
+        """A 1K-only model gets 1K even when the source is larger."""
+        image_path = tmp_path / "input.png"
+        self._write_png(image_path, size=(1500, 10))
+        client, mock_client = _client_returning(_image_response(_png_bytes()))
+
+        result = await client.advanced_edit(
+            image_path=image_path,
+            prompt="watercolor",
+            edit_mode="style_transfer",
+            output_path=tmp_path / "edited.png",
+            model="gemini-3.1-flash-lite-image",
+        )
+
+        assert result.success is True
+        kwargs = mock_client.aio.models.generate_content.call_args.kwargs
+        assert kwargs["model"] == "gemini-3.1-flash-lite-image"
+        assert kwargs["config"].image_config.image_size == "1K"
+        assert result.data["image_size"] == "1K"
+        assert result.data["model"] == "gemini-3.1-flash-lite-image"
+
+    @pytest.mark.asyncio
+    async def test_non_panoramic_model_gets_nearest_standard_ratio(self, tmp_path):
+        """A 5:1 source on the lite model is pinned to 21:9 with a warning."""
+        image_path = tmp_path / "input.png"
+        self._write_png(image_path, size=(1500, 300))
+        client, mock_client = _client_returning(_image_response(_png_bytes()))
+
+        result = await client.advanced_edit(
+            image_path=image_path,
+            prompt="edit",
+            edit_mode="background_swap",
+            output_path=tmp_path / "edited.png",
+            model="gemini-3.1-flash-lite-image",
+        )
+
+        assert result.success is True
+        config = mock_client.aio.models.generate_content.call_args.kwargs["config"]
+        assert config.image_config.aspect_ratio == "21:9"
+        warnings = result.data["warnings"]
+        assert any("1500x300" in w and "21:9" in w for w in warnings)
+
+    @pytest.mark.asyncio
+    async def test_unknown_mode_fails_without_api_call(self, tmp_path):
         """An unknown edit mode returns a failed result and skips the API."""
         image_path = tmp_path / "input.png"
-        self._write_png(image_path, "red")
-        mock_client = Mock()
+        self._write_png(image_path)
+        client, mock_client = _client_returning(_image_response(_png_bytes()))
 
-        client = ImagenAPIClient(api_key="test-key")
-        with patch.object(client, "_get_vertex_client", return_value=mock_client):
-            result = await client.advanced_edit(
-                image_path=image_path,
-                prompt="edit",
-                edit_mode="not_a_mode",
-                output_path=tmp_path / "edited.png",
-            )
+        result = await client.advanced_edit(
+            image_path=image_path,
+            prompt="edit",
+            edit_mode="not_a_mode",
+            output_path=tmp_path / "edited.png",
+        )
 
         assert result.success is False
         assert result.error == "Unknown edit mode: not_a_mode"
-        mock_client.models.edit_image.assert_not_called()
+        mock_client.aio.models.generate_content.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_retired_model_fails_without_api_call(self, tmp_path):
+        """A retired Imagen ID returns the migration error and skips the API."""
+        image_path = tmp_path / "input.png"
+        self._write_png(image_path)
+        client, mock_client = _client_returning(_image_response(_png_bytes()))
+
+        result = await client.advanced_edit(
+            image_path=image_path,
+            prompt="edit",
+            edit_mode="background_swap",
+            output_path=tmp_path / "edited.png",
+            model="imagen-4.0-generate-001",
+        )
+
+        assert result.success is False
+        assert "retired" in result.error
+        assert "gemini-nano-banana-2.1" in result.error
+        mock_client.aio.models.generate_content.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_image_reports_finish_reason(self, tmp_path):
+        """A response without an image surfaces the finish reason."""
+        image_path = tmp_path / "input.png"
+        self._write_png(image_path)
+        client, _ = _client_returning(
+            _no_image_response(types.FinishReason.IMAGE_PROHIBITED_CONTENT)
+        )
+
+        result = await client.advanced_edit(
+            image_path=image_path,
+            prompt="edit",
+            edit_mode="product_image",
+            output_path=tmp_path / "edited.png",
+        )
+
+        assert result.success is False
+        assert result.error == (
+            "No image returned (finish_reason=IMAGE_PROHIBITED_CONTENT)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_api_error_is_classified(self, tmp_path):
+        """API exceptions are mapped to user-facing messages."""
+        image_path = tmp_path / "input.png"
+        self._write_png(image_path)
+        client, mock_client = _client_returning(None)
+        mock_client.aio.models.generate_content = AsyncMock(
+            side_effect=Exception("429 RESOURCE_EXHAUSTED: quota exceeded")
+        )
+
+        result = await client.advanced_edit(
+            image_path=image_path,
+            prompt="edit",
+            edit_mode="background_swap",
+            output_path=tmp_path / "edited.png",
+        )
+
+        assert result.success is False
+        assert result.error.startswith("Rate limit exceeded")
+        assert "quota exceeded" in result.error
 
 
 class TestModelResolution:
@@ -1863,62 +2023,750 @@ class TestAnalysisModelOverride:
 
 
 class TestUpscale:
-    """Tests for upscale via the Vertex AI upscale_image API."""
+    """Tests for generative upscale via generate_content."""
+
+    @staticmethod
+    def _write_png(path, size=(1024, 1024)):
+        """Write a solid-colour PNG of the given size to ``path``."""
+        Image.new("RGB", size, color="red").save(str(path))
 
     @pytest.mark.asyncio
-    async def test_upscale_sends_sdk_image_with_file_bytes(self, tmp_path):
-        """The request image is a types.Image carrying the file's bytes."""
+    async def test_upscale_rerenders_with_default_model(self, tmp_path):
+        """x2 from 1K sends the source, the instruction, and a 2K config."""
         image_path = tmp_path / "input.png"
-        buf = io.BytesIO()
-        Image.new("RGB", (10, 10), color="red").save(buf, format="PNG")
-        image_path.write_bytes(buf.getvalue())
-
-        result_buf = io.BytesIO()
-        Image.new("RGB", (20, 20), color="green").save(result_buf, format="PNG")
-        mock_generated = Mock()
-        mock_generated.image = Mock(image_bytes=result_buf.getvalue())
-        mock_response = Mock()
-        mock_response.generated_images = [mock_generated]
-        mock_client = Mock()
-        mock_client.models.upscale_image = Mock(return_value=mock_response)
-
+        self._write_png(image_path)
         output_path = tmp_path / "upscaled.png"
-        client = ImagenAPIClient(api_key="test-key")
-        with patch.object(client, "_get_vertex_client", return_value=mock_client):
-            result = await client.upscale(
-                image_path=image_path,
-                output_path=output_path,
-                upscale_factor="x2",
-            )
+        client, mock_client = _client_returning(
+            _image_response(_png_bytes(size=(32, 32), color="green"))
+        )
+
+        result = await client.upscale(
+            image_path=image_path, output_path=output_path, upscale_factor="x2"
+        )
 
         assert result.success is True
         assert output_path.exists()
+        assert result.image_paths == [str(output_path)]
+        mock_client.aio.models.generate_content.assert_awaited_once()
+        kwargs = mock_client.aio.models.generate_content.call_args.kwargs
+        assert kwargs["model"] == "gemini-nano-banana-2.1"
+        source, instruction = kwargs["contents"]
+        assert isinstance(source, Image.Image)
+        assert source.size == (1024, 1024)
+        assert instruction == UPSCALE_INSTRUCTION
+        config = kwargs["config"]
+        assert config.response_modalities == ["IMAGE"]
+        assert config.image_config.image_size == "2K"
+        assert config.image_config.aspect_ratio == "1:1"
 
-        mock_client.models.upscale_image.assert_called_once()
-        kwargs = mock_client.models.upscale_image.call_args.kwargs
-        assert isinstance(kwargs["image"], types.Image)
-        assert kwargs["image"].image_bytes == image_path.read_bytes()
-        assert kwargs["upscale_factor"] == "x2"
-        assert isinstance(kwargs["config"], types.UpscaleImageConfig)
+        data = result.data
+        assert data["upscale_factor"] == "x2"
+        assert data["model"] == "gemini-nano-banana-2.1"
+        assert data["method"] == "generative"
+        assert data["image_size"] == "2K"
+        assert data["source_size"] == [1024, 1024]
+        assert data["output_size"] == [32, 32]
+        assert data["image_path"] == str(output_path)
+        assert data["warnings"] == [GENERATIVE_UPSCALE_WARNING]
 
     @pytest.mark.asyncio
-    async def test_upscale_no_output_fails(self, tmp_path):
-        """An empty response returns a failed result."""
+    async def test_upscale_x4_targets_4k_with_model_override(self, tmp_path):
+        """x4 from 1K asks for 4K and honours the model override."""
         image_path = tmp_path / "input.png"
-        Image.new("RGB", (10, 10), color="red").save(str(image_path))
+        self._write_png(image_path)
+        client, mock_client = _client_returning(_image_response(_png_bytes()))
 
-        mock_response = Mock()
-        mock_response.generated_images = []
-        mock_client = Mock()
-        mock_client.models.upscale_image = Mock(return_value=mock_response)
+        result = await client.upscale(
+            image_path=image_path,
+            output_path=tmp_path / "upscaled.png",
+            upscale_factor="x4",
+            model="gemini-3-pro-image",
+        )
 
-        client = ImagenAPIClient(api_key="test-key")
-        with patch.object(client, "_get_vertex_client", return_value=mock_client):
-            result = await client.upscale(
-                image_path=image_path,
-                output_path=tmp_path / "upscaled.png",
-                upscale_factor="x4",
-            )
+        assert result.success is True
+        kwargs = mock_client.aio.models.generate_content.call_args.kwargs
+        assert kwargs["model"] == "gemini-3-pro-image"
+        assert kwargs["config"].image_config.image_size == "4K"
+        assert result.data["image_size"] == "4K"
+        assert result.data["model"] == "gemini-3-pro-image"
+
+    @pytest.mark.asyncio
+    async def test_upscale_pins_nearest_aspect_ratio(self, tmp_path):
+        """A 16:9 source is re-rendered at 16:9."""
+        image_path = tmp_path / "input.png"
+        self._write_png(image_path, size=(1600, 900))
+        client, mock_client = _client_returning(_image_response(_png_bytes()))
+
+        result = await client.upscale(
+            image_path=image_path,
+            output_path=tmp_path / "upscaled.png",
+            upscale_factor="x2",
+        )
+
+        assert result.success is True
+        config = mock_client.aio.models.generate_content.call_args.kwargs["config"]
+        assert config.image_config.aspect_ratio == "16:9"
+        assert config.image_config.image_size == "4K"
+        assert result.data["source_size"] == [1600, 900]
+
+    @pytest.mark.asyncio
+    async def test_upscale_cap_warning_is_reported(self, tmp_path):
+        """x2 beyond 4K is capped at 4K with a warning."""
+        image_path = tmp_path / "input.png"
+        self._write_png(image_path, size=(3000, 10))
+        client, _ = _client_returning(_image_response(_png_bytes()))
+
+        result = await client.upscale(
+            image_path=image_path,
+            output_path=tmp_path / "upscaled.png",
+            upscale_factor="x2",
+        )
+
+        assert result.success is True
+        assert result.data["image_size"] == "4K"
+        warnings = result.data["warnings"]
+        assert warnings[0] == GENERATIVE_UPSCALE_WARNING
+        assert "6000px" in warnings[1]
+        assert "capped at 4K" in warnings[1]
+
+    @pytest.mark.asyncio
+    async def test_upscale_clamps_panoramic_ratio_for_pro_model(self, tmp_path):
+        """gemini-3-pro-image has no panoramic output; 4:1 becomes 21:9."""
+        image_path = tmp_path / "input.png"
+        self._write_png(image_path, size=(2000, 500))
+        client, mock_client = _client_returning(_image_response(_png_bytes()))
+
+        result = await client.upscale(
+            image_path=image_path,
+            output_path=tmp_path / "upscaled.png",
+            upscale_factor="x2",
+            model="gemini-3-pro-image",
+        )
+
+        assert result.success is True
+        config = mock_client.aio.models.generate_content.call_args.kwargs["config"]
+        assert config.image_config.aspect_ratio == "21:9"
+        warnings = result.data["warnings"]
+        assert warnings[0] == GENERATIVE_UPSCALE_WARNING
+        assert any("2000x500" in w and "21:9" in w for w in warnings)
+
+    @pytest.mark.asyncio
+    async def test_upscale_keeps_panoramic_ratio_for_default_model(self, tmp_path):
+        """The default model honours 4:1, so no ratio warning is added."""
+        image_path = tmp_path / "input.png"
+        self._write_png(image_path, size=(2000, 500))
+        client, mock_client = _client_returning(_image_response(_png_bytes()))
+
+        result = await client.upscale(
+            image_path=image_path,
+            output_path=tmp_path / "upscaled.png",
+            upscale_factor="x2",
+        )
+
+        assert result.success is True
+        config = mock_client.aio.models.generate_content.call_args.kwargs["config"]
+        assert config.image_config.aspect_ratio == "4:1"
+        assert result.data["warnings"] == [GENERATIVE_UPSCALE_WARNING]
+
+    @pytest.mark.asyncio
+    async def test_upscale_rejects_1k_only_model(self, tmp_path):
+        """A 1K-only model cannot reach 2K; the error names the alternatives."""
+        image_path = tmp_path / "input.png"
+        self._write_png(image_path)
+        client, mock_client = _client_returning(_image_response(_png_bytes()))
+
+        result = await client.upscale(
+            image_path=image_path,
+            output_path=tmp_path / "upscaled.png",
+            upscale_factor="x2",
+            model="gemini-3.1-flash-lite-image",
+        )
 
         assert result.success is False
-        assert result.error == "Upscaling produced no output"
+        assert result.error.startswith("gemini-3.1-flash-lite-image cannot output 2K")
+        assert "gemini-nano-banana-2.1" in result.error
+        assert "gemini-3-pro-image" in result.error
+        mock_client.aio.models.generate_content.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_upscale_rejects_retired_imagen_model(self, tmp_path):
+        """A retired Imagen ID returns the migration error and skips the API."""
+        image_path = tmp_path / "input.png"
+        self._write_png(image_path)
+        client, mock_client = _client_returning(_image_response(_png_bytes()))
+
+        result = await client.upscale(
+            image_path=image_path,
+            output_path=tmp_path / "upscaled.png",
+            upscale_factor="x2",
+            model="imagen-4.0-generate-001",
+        )
+
+        assert result.success is False
+        assert "retired" in result.error
+        assert "gemini-nano-banana-2.1" in result.error
+        mock_client.aio.models.generate_content.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_upscale_rewrites_preview_alias_with_warning(self, tmp_path):
+        """A shut-down preview ID is rewritten and the warning is appended."""
+        image_path = tmp_path / "input.png"
+        self._write_png(image_path)
+        client, mock_client = _client_returning(_image_response(_png_bytes()))
+
+        result = await client.upscale(
+            image_path=image_path,
+            output_path=tmp_path / "upscaled.png",
+            upscale_factor="x2",
+            model="gemini-3-pro-image-preview",
+        )
+
+        assert result.success is True
+        kwargs = mock_client.aio.models.generate_content.call_args.kwargs
+        assert kwargs["model"] == "gemini-3-pro-image"
+        assert result.data["model"] == "gemini-3-pro-image"
+        assert any("gemini-3-pro-image-preview" in w for w in result.data["warnings"])
+
+    @pytest.mark.asyncio
+    async def test_upscale_source_already_4k_fails_without_api_call(self, tmp_path):
+        """A source at the 4K ceiling cannot be upscaled."""
+        image_path = tmp_path / "input.png"
+        self._write_png(image_path, size=(4096, 10))
+        client, mock_client = _client_returning(_image_response(_png_bytes()))
+
+        result = await client.upscale(
+            image_path=image_path,
+            output_path=tmp_path / "upscaled.png",
+            upscale_factor="x2",
+        )
+
+        assert result.success is False
+        assert "already 4096px" in result.error
+        mock_client.aio.models.generate_content.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_upscale_no_image_reports_finish_reason(self, tmp_path):
+        """A response without an image surfaces the finish reason."""
+        image_path = tmp_path / "input.png"
+        self._write_png(image_path)
+        output_path = tmp_path / "upscaled.png"
+        client, _ = _client_returning(
+            _no_image_response(types.FinishReason.IMAGE_SAFETY)
+        )
+
+        result = await client.upscale(
+            image_path=image_path, output_path=output_path, upscale_factor="x4"
+        )
+
+        assert result.success is False
+        assert result.error == "No image returned (finish_reason=IMAGE_SAFETY)"
+        assert not output_path.exists()
+
+
+class TestBackendSelection:
+    """Backend detection and google-genai client construction."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_credential_env(self, monkeypatch):
+        for var in CREDENTIAL_ENV_VARS:
+            monkeypatch.delenv(var, raising=False)
+
+    def test_no_credentials_defaults_to_gemini_api(self):
+        client = ImagenAPIClient()
+        assert client.backend == BACKEND_GEMINI_API
+        assert client.project_id is None
+        assert client.location == DEFAULT_VERTEX_LOCATION == "global"
+
+    def test_api_key_selects_gemini_api(self):
+        client = ImagenAPIClient(api_key="test-key")
+        assert client.backend == BACKEND_GEMINI_API
+
+    def test_project_without_key_selects_vertex_ai(self):
+        client = ImagenAPIClient(project_id="my-project")
+        assert client.backend == BACKEND_VERTEX_AI
+        assert client.project_id == "my-project"
+        assert client.location == "global"
+
+    def test_project_env_without_key_selects_vertex_ai(self, monkeypatch):
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "my-project")
+        monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "us")
+        client = ImagenAPIClient()
+        assert client.backend == BACKEND_VERTEX_AI
+        assert client.project_id == "my-project"
+        assert client.location == "us"
+
+    @pytest.mark.parametrize(
+        "var", ["GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "GEMINI_API_KEY"]
+    )
+    def test_key_env_with_project_selects_gemini_api(self, monkeypatch, var):
+        monkeypatch.setenv(var, "env-key")
+        client = ImagenAPIClient(project_id="my-project")
+        assert client.backend == BACKEND_GEMINI_API
+
+    def test_explicit_backend_overrides_detection(self):
+        client = ImagenAPIClient(
+            api_key="test-key", backend=BACKEND_VERTEX_AI, project_id="my-project"
+        )
+        assert client.backend == BACKEND_VERTEX_AI
+
+    @pytest.mark.parametrize(
+        "var", ["GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_ENTERPRISE"]
+    )
+    def test_sdk_switch_prefers_vertex_ai_over_key(self, monkeypatch, var):
+        monkeypatch.setenv("GOOGLE_API_KEY", "env-key")
+        monkeypatch.setenv(var, "true")
+        client = ImagenAPIClient(project_id="my-project")
+        assert client.backend == BACKEND_VERTEX_AI
+
+    def test_sdk_switch_without_project_stays_on_gemini_api(self, monkeypatch):
+        monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+        client = ImagenAPIClient(api_key="test-key")
+        assert client.backend == BACKEND_GEMINI_API
+
+    @patch("google.genai.Client")
+    def test_gemini_client_pins_vertexai_false_despite_sdk_switch(
+        self, mock_client_cls, monkeypatch
+    ):
+        """The SDK would reroute an API key to Vertex AI unless told not to."""
+        monkeypatch.setenv("GOOGLE_GENAI_USE_ENTERPRISE", "true")
+        client = ImagenAPIClient(api_key="test-key")
+
+        client._get_genai_client()
+
+        kwargs = mock_client_cls.call_args.kwargs
+        assert kwargs["vertexai"] is False
+        assert kwargs["api_key"] == "test-key"
+
+    @patch("google.genai.Client")
+    def test_vertex_client_construction(self, mock_client_cls):
+        client = ImagenAPIClient(project_id="my-project", location="global")
+
+        genai_client = client._get_genai_client()
+
+        mock_client_cls.assert_called_once()
+        kwargs = mock_client_cls.call_args.kwargs
+        assert kwargs["vertexai"] is True
+        assert kwargs["project"] == "my-project"
+        assert kwargs["location"] == "global"
+        assert "api_key" not in kwargs
+        retry = kwargs["http_options"].retry_options
+        assert retry.attempts == RETRY_ATTEMPTS == 5
+        assert retry.http_status_codes == RETRY_STATUS_CODES
+        assert 429 in retry.http_status_codes
+        assert genai_client is mock_client_cls.return_value
+        # The client is cached.
+        assert client._get_genai_client() is genai_client
+        mock_client_cls.assert_called_once()
+
+    @patch("google.genai.Client")
+    def test_gemini_client_construction(self, mock_client_cls):
+        client = ImagenAPIClient(api_key="test-key")
+
+        client._get_genai_client()
+
+        kwargs = mock_client_cls.call_args.kwargs
+        assert kwargs["api_key"] == "test-key"
+        assert kwargs["vertexai"] is False
+        assert "project" not in kwargs
+        assert "location" not in kwargs
+        assert kwargs["http_options"].retry_options.attempts == 5
+
+    @patch("google.genai.Client")
+    def test_gemini_client_uses_env_key(self, mock_client_cls, monkeypatch):
+        monkeypatch.setenv("GOOGLE_GENERATIVE_AI_API_KEY", "env-key")
+        client = ImagenAPIClient()
+
+        client._get_genai_client()
+
+        assert mock_client_cls.call_args.kwargs["api_key"] == "env-key"
+
+    @patch("google.genai.Client")
+    def test_vertex_without_project_raises(self, mock_client_cls):
+        client = ImagenAPIClient(backend=BACKEND_VERTEX_AI)
+
+        with pytest.raises(ValueError, match="GOOGLE_CLOUD_PROJECT"):
+            client._get_genai_client()
+
+        mock_client_cls.assert_not_called()
+
+    @patch("google.genai.Client")
+    def test_gemini_without_key_raises(self, mock_client_cls):
+        client = ImagenAPIClient()
+
+        with pytest.raises(ValueError, match="No credentials found"):
+            client._get_genai_client()
+
+        mock_client_cls.assert_not_called()
+
+
+class TestExtractImages:
+    """Tests for _extract_images response handling."""
+
+    def test_returns_inline_images(self):
+        images, reason = ImagenAPIClient._extract_images(_image_response(_png_bytes()))
+        assert len(images) == 1
+        assert isinstance(images[0], Image.Image)
+        assert reason is None
+
+    @pytest.mark.parametrize("candidates", [None, []])
+    def test_no_candidates(self, candidates):
+        response = Mock(candidates=candidates)
+
+        images, reason = ImagenAPIClient._extract_images(response)
+
+        assert images == []
+        assert reason == "No image returned (finish_reason=no candidates)"
+
+    def test_candidate_without_content(self):
+        candidate = Mock()
+        candidate.content = None
+        candidate.finish_reason = types.FinishReason.NO_IMAGE
+        response = Mock(candidates=[candidate])
+
+        images, reason = ImagenAPIClient._extract_images(response)
+
+        assert images == []
+        assert reason == "No image returned (finish_reason=NO_IMAGE)"
+
+    def test_parts_none_with_image_safety(self):
+        response = _no_image_response(types.FinishReason.IMAGE_SAFETY, parts=None)
+
+        images, reason = ImagenAPIClient._extract_images(response)
+
+        assert images == []
+        assert reason == "No image returned (finish_reason=IMAGE_SAFETY)"
+
+    def test_text_only_parts_append_text(self):
+        part = Mock()
+        part.inline_data = None
+        part.text = "  I cannot create that image.  "
+        response = _no_image_response(types.FinishReason.STOP, parts=[part])
+
+        images, reason = ImagenAPIClient._extract_images(response)
+
+        assert images == []
+        assert reason == (
+            "No image returned (finish_reason=STOP): I cannot create that image."
+        )
+
+    def test_inline_part_without_data_is_skipped(self):
+        part = Mock()
+        part.inline_data = Mock(data=None)
+        part.text = None
+        response = _no_image_response(types.FinishReason.STOP, parts=[part])
+
+        images, reason = ImagenAPIClient._extract_images(response)
+
+        assert images == []
+        assert reason == "No image returned (finish_reason=STOP)"
+
+    def test_undecodable_inline_data_is_reported(self):
+        part = Mock()
+        part.inline_data = Mock(data=b"notanimage")
+        part.text = None
+        response = _no_image_response(types.FinishReason.STOP, parts=[part])
+
+        images, reason = ImagenAPIClient._extract_images(response)
+
+        assert images == []
+        assert reason == (
+            "No image returned (finish_reason=STOP); 1 undecodable image part(s)"
+        )
+
+    def test_undecodable_part_does_not_hide_a_good_image(self):
+        bad = Mock()
+        bad.inline_data = Mock(data=b"notanimage")
+        good = Mock()
+        good.inline_data = Mock(data=_png_bytes())
+        response = _no_image_response(types.FinishReason.STOP, parts=[bad, good])
+
+        images, reason = ImagenAPIClient._extract_images(response)
+
+        assert len(images) == 1
+        assert reason is None
+
+    def test_string_finish_reason(self):
+        response = _no_image_response("IMAGE_OTHER", parts=[])
+
+        _, reason = ImagenAPIClient._extract_images(response)
+
+        assert reason == "No image returned (finish_reason=IMAGE_OTHER)"
+
+    def test_missing_finish_reason(self):
+        response = _no_image_response(None, parts=[])
+
+        _, reason = ImagenAPIClient._extract_images(response)
+
+        assert reason == "No image returned (finish_reason=unknown)"
+
+
+class TestSdkImageSize:
+    """Tool-facing size tiers map to the values the API accepts."""
+
+    @pytest.mark.parametrize(
+        "given,expected",
+        [("0.5K", "512px"), ("1K", "1K"), ("2K", "2K"), ("4K", "4K"), (None, None)],
+    )
+    def test_maps_tool_sizes(self, given, expected):
+        assert ImagenAPIClient._sdk_image_size(given) == expected
+
+    @pytest.mark.asyncio
+    async def test_generate_sends_512px_for_half_k(self, tmp_path):
+        client, mock_client = _client_returning(_image_response(_png_bytes()))
+
+        result = await client.generate(
+            prompt="a cat",
+            output_path=tmp_path / "out.png",
+            image_size="0.5K",
+            model="gemini-3.1-flash-image",
+        )
+
+        assert result.success is True
+        config = mock_client.aio.models.generate_content.call_args.kwargs["config"]
+        assert config.image_config.image_size == "512px"
+        assert result.data["image_size"] == "0.5K"
+
+    @pytest.mark.asyncio
+    async def test_generate_passes_2k_through(self, tmp_path):
+        client, mock_client = _client_returning(_image_response(_png_bytes()))
+
+        result = await client.generate(
+            prompt="a cat", output_path=tmp_path / "out.png", image_size="2K"
+        )
+
+        assert result.success is True
+        config = mock_client.aio.models.generate_content.call_args.kwargs["config"]
+        assert config.image_config.image_size == "2K"
+
+
+class TestGeometryHelpers:
+    """Aspect ratio, size tier, and upscale target selection."""
+
+    @pytest.mark.parametrize(
+        "width,height,expected",
+        [
+            (1024, 1024, "1:1"),
+            (2048, 512, "4:1"),
+            (1600, 900, "16:9"),
+            (900, 1600, "9:16"),
+            (3000, 2000, "3:2"),
+            (0, 100, "1:1"),
+            (100, 0, "1:1"),
+        ],
+    )
+    def test_nearest_aspect_ratio(self, width, height, expected):
+        assert ImagenAPIClient._nearest_aspect_ratio(width, height) == expected
+
+    def test_nearest_aspect_ratio_is_symmetric_in_log_space(self):
+        """A wide source and its tall mirror get mirrored ratios."""
+        assert ImagenAPIClient._nearest_aspect_ratio(3100, 1000) == "4:1"
+        assert ImagenAPIClient._nearest_aspect_ratio(1000, 3100) == "1:4"
+
+    @pytest.mark.parametrize(
+        "model,expected",
+        [
+            ("gemini-nano-banana-2.1", "4:1"),
+            ("gemini-3.1-flash-image", "4:1"),
+            ("gemini-3-pro-image", "21:9"),
+            ("gemini-3.1-flash-lite-image", "21:9"),
+            ("gemini-2.5-flash-image", "21:9"),
+            ("custom-model", "4:1"),
+            (None, "4:1"),
+        ],
+    )
+    def test_nearest_aspect_ratio_respects_model_support(self, model, expected):
+        assert ImagenAPIClient._nearest_aspect_ratio(2048, 512, model) == expected
+
+    def test_tall_source_on_non_panoramic_model(self):
+        ratio = ImagenAPIClient._nearest_aspect_ratio(512, 2048, "gemini-3-pro-image")
+        assert ratio == "9:16"
+
+    def test_aspect_ratio_warning_only_when_shape_drifts(self):
+        warn = ImagenAPIClient._aspect_ratio_warning
+        assert warn(1600, 900, "16:9", "m") is None
+        assert warn(1040, 1000, "1:1", "m") is None
+        assert warn(0, 10, "1:1", "m") is None
+        warning = warn(2048, 512, "21:9", "gemini-3-pro-image")
+        assert warning is not None
+        assert "2048x512" in warning
+        assert "21:9" in warning
+        assert "gemini-3-pro-image" in warning
+
+    @pytest.mark.asyncio
+    async def test_list_models_panoramic_flags_match_aspect_support(self):
+        """The metadata shown to users agrees with the ratio clamp."""
+        result = await ImagenAPIClient(api_key="test-key").list_models()
+
+        for model in result.data["models"]:
+            expected = "4:1" in supported_aspect_ratios(model["name"])
+            assert model["capabilities"]["panoramic"] is expected, model["name"]
+
+    @pytest.mark.parametrize(
+        "edge,expected",
+        [
+            (1, "1K"),
+            (512, "1K"),
+            (1024, "1K"),
+            (1025, "2K"),
+            (2048, "2K"),
+            (2049, "4K"),
+            (4096, "4K"),
+            (9000, "4K"),
+        ],
+    )
+    def test_size_tier_for_edge(self, edge, expected):
+        assert ImagenAPIClient._size_tier_for_edge(edge) == expected
+
+    def test_upscale_target_x2_from_1k(self):
+        assert ImagenAPIClient._upscale_target(1024, 1024, "x2") == ("2K", None, None)
+
+    def test_upscale_target_x4_from_1k(self):
+        assert ImagenAPIClient._upscale_target(1024, 1024, "x4") == ("4K", None, None)
+
+    def test_upscale_target_x2_from_512(self):
+        assert ImagenAPIClient._upscale_target(512, 512, "x2") == ("1K", None, None)
+
+    def test_upscale_target_uses_long_edge(self):
+        assert ImagenAPIClient._upscale_target(100, 1024, "x2") == ("2K", None, None)
+
+    def test_upscale_target_caps_at_4k_with_warning(self):
+        tier, warning, error = ImagenAPIClient._upscale_target(3000, 2000, "x2")
+
+        assert tier == "4K"
+        assert error is None
+        assert "6000px" in warning
+        assert "capped at 4K (4096px)" in warning
+
+    def test_upscale_target_rejects_source_at_4k(self):
+        tier, warning, error = ImagenAPIClient._upscale_target(4096, 1000, "x2")
+
+        assert tier is None
+        assert warning is None
+        assert "already 4096px" in error
+        assert "4K (4096px)" in error
+
+
+class TestClassifyError:
+    """Tests for _classify_error messages."""
+
+    @staticmethod
+    def _client_error(code, status, message):
+        body = {"error": {"code": code, "message": message, "status": status}}
+        return errors.ClientError(code, body)
+
+    @pytest.mark.parametrize("casing", ["Publisher Model", "Publisher model"])
+    def test_vertex_regional_not_found_adds_location_hint(self, casing):
+        """Both casings seen from the API get the location hint."""
+        err = self._client_error(
+            404,
+            "NOT_FOUND",
+            f"{casing} `projects/my-project/locations/us-central1/publishers/"
+            "google/models/gemini-nano-banana-2.1` was not found or your "
+            "project does not have access to it.",
+        )
+
+        message = ImagenAPIClient._classify_error(err)
+
+        assert message.startswith(casing)
+        assert "GOOGLE_CLOUD_LOCATION=global" in message
+
+    def test_vertex_global_not_found_names_unknown_model(self):
+        """At global the location hint is wrong; the model ID is the problem."""
+        err = self._client_error(
+            404,
+            "NOT_FOUND",
+            "Publisher Model `projects/my-project/locations/global/publishers/"
+            "google/models/gemini-does-not-exist` was not found or your "
+            "project does not have access to it.",
+        )
+
+        message = ImagenAPIClient._classify_error(err)
+
+        assert "GOOGLE_CLOUD_LOCATION" not in message
+        assert "unknown or retired" in message
+        assert "list_available_models" in message
+
+    def test_plain_exception_not_found_keeps_text(self):
+        err = Exception(
+            "404 NOT_FOUND. Publisher model `projects/my-project/locations/"
+            "us-central1/publishers/google/models/gemini-nano-banana-2.1` "
+            "was not found or your project does not have access to it."
+        )
+
+        message = ImagenAPIClient._classify_error(err)
+
+        assert message.startswith("404 NOT_FOUND")
+        assert "GOOGLE_CLOUD_LOCATION=global" in message
+
+    def test_quota_error_keeps_api_text(self):
+        """A quota of 0 is an account limit; the text must survive."""
+        err = self._client_error(
+            429,
+            "RESOURCE_EXHAUSTED",
+            "Quota exceeded for aiplatform.googleapis.com/"
+            "online_prediction_requests_per_base_model, limit: 0",
+        )
+
+        message = ImagenAPIClient._classify_error(err)
+
+        assert message.startswith("Rate limit exceeded after 5 attempts")
+        assert "RESOURCE_EXHAUSTED" in message
+        assert "limit: 0" in message
+        assert "quota increase" in message
+
+    def test_resource_exhausted_text_is_rate_limit(self):
+        err = Exception("429 RESOURCE_EXHAUSTED: quota exceeded")
+
+        message = ImagenAPIClient._classify_error(err)
+
+        assert message.startswith("Rate limit exceeded")
+        assert "quota exceeded" in message
+
+    def test_permission_denied_points_at_project_setup(self):
+        err = self._client_error(
+            403,
+            "PERMISSION_DENIED",
+            "Vertex AI API has not been used in project 123456789012 before "
+            "or it is disabled.",
+        )
+
+        message = ImagenAPIClient._classify_error(err)
+
+        assert message.startswith("Permission denied (PERMISSION_DENIED)")
+        assert "has not been used in project" in message
+        assert "roles/aiplatform.user" in message
+
+    def test_invalid_api_key(self):
+        err = self._client_error(
+            400,
+            "INVALID_ARGUMENT",
+            "API key not valid. Please pass a valid API key.",
+        )
+
+        message = ImagenAPIClient._classify_error(err)
+
+        assert message.startswith("Invalid API key:")
+        assert "API key not valid" in message
+
+    def test_invalid_argument_keeps_detail(self):
+        err = self._client_error(
+            400,
+            "INVALID_ARGUMENT",
+            "Unable to submit request because image_size 2K is not supported",
+        )
+
+        message = ImagenAPIClient._classify_error(err)
+
+        assert message.startswith("Invalid request (INVALID_ARGUMENT)")
+        assert "image_size 2K is not supported" in message
+
+    def test_server_error_keeps_code_and_text(self):
+        body = {
+            "error": {"code": 503, "message": "overloaded", "status": "UNAVAILABLE"}
+        }
+        err = errors.ServerError(503, body)
+
+        assert ImagenAPIClient._classify_error(err) == "503 UNAVAILABLE: overloaded"
+
+    def test_other_errors_pass_through(self):
+        assert ImagenAPIClient._classify_error(Exception("boom")) == "boom"

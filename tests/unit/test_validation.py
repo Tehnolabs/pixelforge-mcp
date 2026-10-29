@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from pixelforge_mcp.utils.validation import (
+    ADVANCED_EDIT_MODES,
     ANALYSIS_MODELS,
     ASPECT_RATIOS,
     COST_TABLE,
@@ -14,12 +15,18 @@ from pixelforge_mcp.utils.validation import (
     DEPRECATED_MODEL_ALIASES,
     FORMAT_EXTENSIONS,
     IMAGE_MODELS,
+    IMAGE_SIZE_PIXELS,
     IMAGE_SIZES,
+    MODEL_IMAGE_SIZES,
     OUTPUT_FORMATS,
+    PANORAMIC_MODELS,
+    PANORAMIC_RATIOS,
     PERSON_GENERATION_OPTIONS,
     PROMPT_STYLES,
     QUALITY_PRESETS,
     RETIRED_MODELS,
+    SDK_IMAGE_SIZE_VALUES,
+    AdvancedEditInput,
     AnalyzeImageInput,
     CompareImagesInput,
     DetectObjectsInput,
@@ -29,6 +36,10 @@ from pixelforge_mcp.utils.validation import (
     GenerateImageInput,
     OptimizePromptInput,
     RemoveBackgroundInput,
+    UpscaleImageInput,
+    check_model_image_size,
+    supported_aspect_ratios,
+    supported_image_sizes,
 )
 
 
@@ -369,6 +380,22 @@ class TestQualityPresets:
         """Test default quality is None."""
         data = GenerateImageInput(prompt="test")
         assert data.quality is None
+
+    def test_fast_preset_rejects_sizes_lite_cannot_output(self):
+        """quality='fast' resolves to the 1K-only lite model."""
+        with pytest.raises(ValidationError, match="cannot output 2K"):
+            GenerateImageInput(prompt="test", quality="fast", image_size="2K")
+        with pytest.raises(ValidationError, match=r"cannot output 0\.5K"):
+            GenerateImageInput(prompt="test", quality="fast", image_size="0.5K")
+
+    def test_fast_preset_accepts_1k(self):
+        data = GenerateImageInput(prompt="test", quality="fast", image_size="1K")
+        assert data.image_size == "1K"
+
+    def test_presets_with_fixed_size_ignore_caller_size(self):
+        """'quality' pins 2K, so a 4K request is accepted and overridden."""
+        data = GenerateImageInput(prompt="test", quality="quality", image_size="4K")
+        assert data.quality == "quality"
 
 
 class TestEditImageInput:
@@ -1044,3 +1071,326 @@ class TestAnalysisModelOverride:
         """Test the field description names the default analysis model."""
         description = AnalyzeImageInput.model_fields["model"].description
         assert DEFAULT_ANALYSIS_MODEL in description
+
+
+class TestModelImageSizeCombos:
+    """Tests for per-model image_size support."""
+
+    def test_sdk_values_cover_every_size(self):
+        """Every tool-facing size maps to an API value; 0.5K becomes 512px."""
+        assert set(SDK_IMAGE_SIZE_VALUES) == set(IMAGE_SIZES)
+        assert SDK_IMAGE_SIZE_VALUES["0.5K"] == "512px"
+        assert SDK_IMAGE_SIZE_VALUES["1K"] == "1K"
+        assert SDK_IMAGE_SIZE_VALUES["4K"] == "4K"
+
+    def test_size_pixels(self):
+        """Pixel widths per tier."""
+        assert IMAGE_SIZE_PIXELS == {"0.5K": 512, "1K": 1024, "2K": 2048, "4K": 4096}
+
+    def test_model_sizes_use_known_models_and_sizes(self):
+        """Every entry names a listed model and only valid sizes."""
+        for model, sizes in MODEL_IMAGE_SIZES.items():
+            assert model in IMAGE_MODELS
+            assert sizes
+            assert set(sizes) <= set(IMAGE_SIZES)
+        assert MODEL_IMAGE_SIZES["gemini-3.1-flash-lite-image"] == ["1K"]
+        assert "0.5K" in MODEL_IMAGE_SIZES["gemini-3.1-flash-image"]
+        assert "0.5K" not in MODEL_IMAGE_SIZES["gemini-nano-banana-2.1"]
+        assert "4K" in MODEL_IMAGE_SIZES["gemini-nano-banana-2.1"]
+        assert "4K" in MODEL_IMAGE_SIZES["gemini-3-pro-image"]
+
+    def test_supported_image_sizes_unknown_model(self):
+        """Unknown models are not constrained."""
+        assert supported_image_sizes("custom-model") is None
+        assert supported_image_sizes("gemini-3-pro-image") == ["1K", "2K", "4K"]
+
+    def test_check_model_image_size_skips_missing_values(self):
+        """No model or no size means nothing to check."""
+        check_model_image_size(None, "2K")
+        check_model_image_size("gemini-3.1-flash-lite-image", None)
+        check_model_image_size("custom-model", "4K")
+
+    def test_lite_rejects_2k(self):
+        """gemini-3.1-flash-lite-image is 1K only."""
+        with pytest.raises(ValidationError, match="cannot output 2K") as exc_info:
+            GenerateImageInput(
+                prompt="test", model="gemini-3.1-flash-lite-image", image_size="2K"
+            )
+        assert "Supported sizes: 1K" in str(exc_info.value)
+
+    def test_nano_banana_rejects_half_k(self):
+        """gemini-nano-banana-2.1 has no 512px tier."""
+        with pytest.raises(ValidationError, match=r"cannot output 0\.5K"):
+            GenerateImageInput(
+                prompt="test", model="gemini-nano-banana-2.1", image_size="0.5K"
+            )
+
+    def test_flash_image_accepts_half_k(self):
+        """gemini-3.1-flash-image supports the 512px tier."""
+        data = GenerateImageInput(
+            prompt="test", model="gemini-3.1-flash-image", image_size="0.5k"
+        )
+        assert data.image_size == "0.5K"
+
+    def test_check_is_case_normalised(self):
+        """Lowercase sizes are normalised before the model check."""
+        with pytest.raises(ValidationError, match="cannot output 4K"):
+            GenerateImageInput(
+                prompt="test", model="gemini-3.1-flash-lite-image", image_size="4k"
+            )
+
+    def test_unknown_model_accepts_any_size(self):
+        """Unknown models defer to the API."""
+        data = GenerateImageInput(prompt="test", model="custom-model", image_size="4K")
+        assert data.image_size == "4K"
+
+    def test_size_without_model_is_accepted(self):
+        """No explicit model means no combination to validate."""
+        data = GenerateImageInput(prompt="test", image_size="4K")
+        assert data.model is None
+        assert data.image_size == "4K"
+
+
+class TestUpscaleImageInput:
+    """Tests for UpscaleImageInput validation."""
+
+    def test_defaults(self, tmp_path):
+        img = tmp_path / "photo.png"
+        img.touch()
+
+        data = UpscaleImageInput(image_path=str(img))
+
+        assert data.upscale_factor == "x2"
+        assert data.model is None
+        assert data.output_filename is None
+        assert data.output_format == "png"
+        assert data.image_path == str(img.absolute())
+
+    def test_factor_is_case_insensitive(self, tmp_path):
+        img = tmp_path / "photo.png"
+        img.touch()
+
+        data = UpscaleImageInput(image_path=str(img), upscale_factor="X4")
+
+        assert data.upscale_factor == "x4"
+
+    def test_invalid_factor_rejected(self, tmp_path):
+        img = tmp_path / "photo.png"
+        img.touch()
+
+        with pytest.raises(ValidationError, match="must be 'x2' or 'x4'"):
+            UpscaleImageInput(image_path=str(img), upscale_factor="x3")
+
+    def test_nonexistent_image_rejected(self):
+        with pytest.raises(ValidationError, match="not found"):
+            UpscaleImageInput(image_path="/nonexistent.png")
+
+    def test_lite_model_rejected(self, tmp_path):
+        img = tmp_path / "photo.png"
+        img.touch()
+
+        with pytest.raises(ValidationError, match="outputs 1K only") as exc_info:
+            UpscaleImageInput(image_path=str(img), model="gemini-3.1-flash-lite-image")
+        assert DEFAULT_MODEL in str(exc_info.value)
+        assert "gemini-3-pro-image" in str(exc_info.value)
+
+    def test_legacy_1k_model_rejected(self, tmp_path):
+        img = tmp_path / "photo.png"
+        img.touch()
+
+        with pytest.raises(ValidationError, match="outputs 1K only"):
+            UpscaleImageInput(image_path=str(img), model="gemini-2.5-flash-image")
+
+    @pytest.mark.parametrize(
+        "model",
+        ["gemini-3-pro-image", "gemini-nano-banana-2.1", "gemini-3.1-flash-image"],
+    )
+    def test_high_resolution_models_accepted(self, tmp_path, model):
+        img = tmp_path / "photo.png"
+        img.touch()
+
+        data = UpscaleImageInput(image_path=str(img), model=model)
+
+        assert data.model == model
+
+    def test_blank_model_means_default(self, tmp_path):
+        img = tmp_path / "photo.png"
+        img.touch()
+
+        data = UpscaleImageInput(image_path=str(img), model="   ")
+
+        assert data.model is None
+
+    def test_unknown_model_passes_through(self, tmp_path):
+        img = tmp_path / "photo.png"
+        img.touch()
+
+        data = UpscaleImageInput(image_path=str(img), model=" custom-model ")
+
+        assert data.model == "custom-model"
+
+    def test_model_field_documents_default(self):
+        description = UpscaleImageInput.model_fields["model"].description
+        assert DEFAULT_MODEL in description
+
+    def test_filename_path_traversal_rejected(self, tmp_path):
+        img = tmp_path / "photo.png"
+        img.touch()
+
+        with pytest.raises(ValidationError, match="cannot contain path separators"):
+            UpscaleImageInput(image_path=str(img), output_filename="../evil.png")
+
+
+class TestAdvancedEditInput:
+    """Tests for AdvancedEditInput validation."""
+
+    @staticmethod
+    def _image(tmp_path, name="photo.png"):
+        img = tmp_path / name
+        img.touch()
+        return img
+
+    def test_valid_without_mask(self, tmp_path):
+        img = self._image(tmp_path)
+
+        data = AdvancedEditInput(
+            image_path=str(img), prompt="a beach", edit_mode="background_swap"
+        )
+
+        assert data.mask_path is None
+        assert data.model is None
+        assert data.edit_mode == "background_swap"
+        assert data.output_format == "png"
+
+    @pytest.mark.parametrize("mode", ADVANCED_EDIT_MODES)
+    def test_every_mode_accepted(self, tmp_path, mode):
+        img = self._image(tmp_path)
+
+        data = AdvancedEditInput(image_path=str(img), prompt="edit", edit_mode=mode)
+
+        assert data.edit_mode == mode
+
+    def test_mode_is_case_insensitive(self, tmp_path):
+        img = self._image(tmp_path)
+
+        data = AdvancedEditInput(
+            image_path=str(img), prompt="edit", edit_mode="OUTPAINT"
+        )
+
+        assert data.edit_mode == "outpaint"
+
+    def test_invalid_mode_rejected(self, tmp_path):
+        img = self._image(tmp_path)
+
+        with pytest.raises(ValidationError, match="Invalid edit mode"):
+            AdvancedEditInput(image_path=str(img), prompt="edit", edit_mode="erase")
+
+    def test_mask_path_is_validated_like_an_image(self, tmp_path):
+        img = self._image(tmp_path)
+        mask = self._image(tmp_path, "mask.png")
+
+        data = AdvancedEditInput(
+            image_path=str(img),
+            prompt="the object",
+            edit_mode="inpaint_removal",
+            mask_path=str(mask),
+        )
+
+        assert data.mask_path == str(mask.absolute())
+
+    def test_missing_mask_rejected(self, tmp_path):
+        img = self._image(tmp_path)
+
+        with pytest.raises(ValidationError, match="Image not found"):
+            AdvancedEditInput(
+                image_path=str(img),
+                prompt="the object",
+                edit_mode="inpaint_removal",
+                mask_path=str(tmp_path / "missing.png"),
+            )
+
+    def test_mask_with_invalid_extension_rejected(self, tmp_path):
+        img = self._image(tmp_path)
+        mask = self._image(tmp_path, "mask.txt")
+
+        with pytest.raises(ValidationError, match="Invalid image format"):
+            AdvancedEditInput(
+                image_path=str(img),
+                prompt="the object",
+                edit_mode="inpaint_removal",
+                mask_path=str(mask),
+            )
+
+    def test_mask_directory_rejected(self, tmp_path):
+        img = self._image(tmp_path)
+        folder = tmp_path / "mask.png"
+        folder.mkdir()
+
+        with pytest.raises(ValidationError, match="not a file"):
+            AdvancedEditInput(
+                image_path=str(img),
+                prompt="the object",
+                edit_mode="inpaint_removal",
+                mask_path=str(folder),
+            )
+
+    @pytest.mark.parametrize("model", IMAGE_MODELS)
+    def test_any_image_model_accepted(self, tmp_path, model):
+        img = self._image(tmp_path)
+
+        data = AdvancedEditInput(
+            image_path=str(img), prompt="edit", edit_mode="style_transfer", model=model
+        )
+
+        assert data.model == model
+
+    def test_blank_model_means_default(self, tmp_path):
+        img = self._image(tmp_path)
+
+        data = AdvancedEditInput(
+            image_path=str(img), prompt="edit", edit_mode="style_transfer", model=""
+        )
+
+        assert data.model is None
+
+    def test_model_field_documents_default(self):
+        description = AdvancedEditInput.model_fields["model"].description
+        assert DEFAULT_MODEL in description
+
+    def test_empty_prompt_rejected(self, tmp_path):
+        img = self._image(tmp_path)
+
+        with pytest.raises(ValidationError, match="Prompt cannot be empty"):
+            AdvancedEditInput(image_path=str(img), prompt="   ", edit_mode="outpaint")
+
+    def test_nonexistent_image_rejected(self):
+        with pytest.raises(ValidationError, match="not found"):
+            AdvancedEditInput(
+                image_path="/nonexistent.png", prompt="edit", edit_mode="outpaint"
+            )
+
+
+class TestSupportedAspectRatios:
+    """Per-model panoramic ratio support."""
+
+    def test_panoramic_tables_name_known_values(self):
+        assert PANORAMIC_MODELS <= set(IMAGE_MODELS)
+        assert set(PANORAMIC_RATIOS) <= set(ASPECT_RATIOS)
+
+    @pytest.mark.parametrize("model", sorted(PANORAMIC_MODELS))
+    def test_panoramic_models_get_every_ratio(self, model):
+        assert supported_aspect_ratios(model) == ASPECT_RATIOS
+
+    @pytest.mark.parametrize(
+        "model",
+        ["gemini-3-pro-image", "gemini-3.1-flash-lite-image", "gemini-2.5-flash-image"],
+    )
+    def test_other_known_models_exclude_panoramic(self, model):
+        ratios = supported_aspect_ratios(model)
+        assert not set(ratios) & set(PANORAMIC_RATIOS)
+        assert "21:9" in ratios
+        assert "9:16" in ratios
+
+    def test_unknown_or_missing_model_gets_every_ratio(self):
+        assert supported_aspect_ratios("custom-model") == ASPECT_RATIOS
+        assert supported_aspect_ratios(None) == ASPECT_RATIOS
