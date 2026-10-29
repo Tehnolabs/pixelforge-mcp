@@ -59,6 +59,9 @@ def get_api_client() -> ImagenAPIClient:
             model_name=config.imagen.default_model,
             api_key=api_key,
             log_images=False,
+            backend=config.backend,
+            project_id=config.vertex.project_id,
+            location=config.vertex.location,
         )
     return _client
 
@@ -632,7 +635,7 @@ async def transform_image(
 
 
 # ------------------------------------------------------------------
-# Vertex AI tools (optional)
+# Generative upscale and mode-driven editing
 # ------------------------------------------------------------------
 
 
@@ -640,38 +643,35 @@ async def transform_image(
 async def upscale_image(
     image_path: str,
     upscale_factor: str = "x2",
+    model: Optional[str] = None,
     output_filename: Optional[str] = None,
     output_format: str = "png",
 ) -> Dict[str, Any]:
-    """Upscale an image to higher resolution (requires Vertex AI).
+    """Upscale an image to a higher 1K/2K/4K size tier with a Gemini image model.
 
-    This feature requires Google Cloud Vertex AI credentials.
-    Set GOOGLE_CLOUD_PROJECT environment variable to enable.
+    The source is re-rendered at a higher size tier with an instruction to
+    reproduce it exactly. Fine details can differ from the source; for
+    exact pixel scaling use transform_image(operation="resize").
 
     Args:
         image_path: Path to the image to upscale
-        upscale_factor: Scale factor: "x2" (double) or "x4" (quadruple)
+        upscale_factor: "x2" (double) or "x4" (quadruple). The output is
+            the smallest of 1K/2K/4K that fits, capped at 4K.
+        model: Image model to use (default gemini-nano-banana-2.1).
+            gemini-3-pro-image is the other 4K-capable option.
         output_filename: Custom output filename (optional)
         output_format: Output format (png, jpeg, webp)
 
     Returns:
-        Dictionary with upscaled image path
+        Dictionary with the upscaled image path, size tier, and warnings
     """
     logger.info(f"Upscaling image: {upscale_factor}")
 
     try:
-        config = get_config()
-        if not config.vertex.enabled:
-            return {
-                "success": False,
-                "message": "Vertex AI is not configured. "
-                "Set GOOGLE_CLOUD_PROJECT environment variable "
-                "and install: pip install pixelforge-mcp[vertex]",
-            }
-
         inputs = UpscaleImageInput(
             image_path=image_path,
             upscale_factor=upscale_factor,
+            model=model,
             output_filename=output_filename,
             output_format=output_format,
         )
@@ -688,14 +688,22 @@ async def upscale_image(
             output_path=output_path,
             upscale_factor=inputs.upscale_factor,
             output_format=inputs.output_format,
+            model=inputs.model,
         )
 
         if result.success:
+            data = result.data or {}
             return {
                 "success": True,
                 "message": result.output,
                 "output_path": str(output_path.absolute()),
                 "upscale_factor": inputs.upscale_factor,
+                "model": data.get("model"),
+                "method": data.get("method"),
+                "image_size": data.get("image_size"),
+                "source_size": data.get("source_size"),
+                "output_size": data.get("output_size"),
+                "warnings": data.get("warnings", []),
             }
         else:
             return {"success": False, "message": result.error or "Upscaling failed"}
@@ -713,43 +721,38 @@ async def advanced_edit(
     prompt: str,
     edit_mode: str,
     mask_path: Optional[str] = None,
+    model: Optional[str] = None,
     output_filename: Optional[str] = None,
     output_format: str = "png",
 ) -> Dict[str, Any]:
-    """Advanced image editing with specialized modes (requires Vertex AI).
+    """Edit an image with a specialized mode using a Gemini image model.
 
-    This feature requires Google Cloud Vertex AI credentials.
-    Set GOOGLE_CLOUD_PROJECT environment variable to enable.
+    Each mode wraps the prompt in an instruction tuned for that edit. An
+    optional mask (white = region to change) is passed to the model as
+    guidance; the boundary is interpreted semantically, not pixel-exactly.
 
     Args:
         image_path: Path to the image to edit
-        prompt: Edit instruction
+        prompt: What to remove, add, replace, or the style to apply
         edit_mode: One of: inpaint_removal, inpaint_insertion, outpaint,
             background_swap, style_transfer, product_image
-        mask_path: Optional mask image for inpainting operations
+        mask_path: Optional mask image for the inpainting modes
+        model: Image model to use (default gemini-nano-banana-2.1)
         output_filename: Custom output filename (optional)
         output_format: Output format (png, jpeg, webp)
 
     Returns:
-        Dictionary with edited image path
+        Dictionary with the edited image path and warnings
     """
     logger.info(f"Advanced edit: {edit_mode}")
 
     try:
-        config = get_config()
-        if not config.vertex.enabled:
-            return {
-                "success": False,
-                "message": "Vertex AI is not configured. "
-                "Set GOOGLE_CLOUD_PROJECT environment variable "
-                "and install: pip install pixelforge-mcp[vertex]",
-            }
-
         inputs = AdvancedEditInput(
             image_path=image_path,
             prompt=prompt,
             edit_mode=edit_mode,
             mask_path=mask_path,
+            model=model,
             output_filename=output_filename,
             output_format=output_format,
         )
@@ -768,14 +771,21 @@ async def advanced_edit(
             output_path=output_path,
             mask_path=Path(inputs.mask_path) if inputs.mask_path else None,
             output_format=inputs.output_format,
+            model=inputs.model,
         )
 
         if result.success:
+            data = result.data or {}
             return {
                 "success": True,
                 "message": result.output,
                 "output_path": str(output_path.absolute()),
                 "edit_mode": inputs.edit_mode,
+                "model": data.get("model"),
+                "method": data.get("method"),
+                "image_size": data.get("image_size"),
+                "mask_used": data.get("mask_used", False),
+                "warnings": data.get("warnings", []),
             }
         else:
             return {"success": False, "message": result.error or "Edit failed"}
@@ -1586,12 +1596,19 @@ def get_server_info() -> Dict[str, Any]:
             "default_aspect_ratio": (config.imagen.default_aspect_ratio),
             "default_temperature": config.imagen.default_temperature,
         },
+        "backend": {
+            "name": config.backend,
+            "project_id": config.vertex.project_id,
+            "location": config.vertex.location,
+        },
         "tools": {
             "generation": [
                 "generate_image",
                 "edit_image",
                 "remove_background",
                 "transform_image",
+                "upscale_image",
+                "advanced_edit",
             ],
             "analysis": [
                 "analyze_image",
@@ -1615,11 +1632,12 @@ def get_server_info() -> Dict[str, Any]:
         },
         "vertex_ai": {
             "enabled": config.vertex.enabled,
+            "active": config.backend == "vertex_ai",
             "project_id": config.vertex.project_id,
-            "features": (
-                ["upscale_image", "advanced_edit"] if config.vertex.enabled else []
-            ),
-            "setup": "Set GOOGLE_CLOUD_PROJECT and install pixelforge-mcp[vertex]",
+            "location": config.vertex.location,
+            "setup": "Set GOOGLE_CLOUD_PROJECT and GOOGLE_APPLICATION_CREDENTIALS "
+            "(service account) to run every tool through Vertex AI; set "
+            "GOOGLE_GENAI_USE_VERTEXAI=true to prefer it over an API key",
         },
         "features": {
             "resolution_control": "0.5K/1K/2K/4K via image_size",

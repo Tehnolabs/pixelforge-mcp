@@ -72,15 +72,50 @@ class ServerConfig(BaseModel):
     log_level: str = Field(default="INFO", description="Logging level")
 
 
+BACKEND_GEMINI_API = "gemini_api"
+BACKEND_VERTEX_AI = "vertex_ai"
+
+_TRUTHY = {"1", "true", "yes", "on"}
+
+# Switches the google-genai SDK itself reads to route requests to Vertex AI.
+# GOOGLE_GENAI_USE_ENTERPRISE is the newer name; both are accepted.
+VERTEX_SWITCH_ENV_VARS = ("GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_ENTERPRISE")
+
+
+def env_flag(name: str) -> bool:
+    """True when an environment variable holds 1, true, yes, or on."""
+    return os.getenv(name, "").strip().lower() in _TRUTHY
+
+
+def prefer_vertex_from_env() -> bool:
+    """True when either SDK switch asks for Vertex AI."""
+    return any(env_flag(name) for name in VERTEX_SWITCH_ENV_VARS)
+
+
 class VertexConfig(BaseModel):
-    """Optional Vertex AI configuration for advanced features."""
+    """Optional Vertex AI backend configuration.
+
+    When a Google Cloud project is configured and Application Default
+    Credentials are available (for example a service account key in
+    ``GOOGLE_APPLICATION_CREDENTIALS``), every tool can run through
+    Vertex AI instead of the Gemini API key.
+    """
 
     project_id: Optional[str] = Field(
         default=None, description="Google Cloud project ID"
     )
-    location: str = Field(default="us-central1", description="Vertex AI region")
+    location: str = Field(
+        default="global",
+        description="Vertex AI location. The current Gemini image and text "
+        "models are served from the global endpoint.",
+    )
     enabled: bool = Field(
-        default=False, description="Whether Vertex AI features are enabled"
+        default=False, description="Whether Vertex AI credentials are configured"
+    )
+    prefer: bool = Field(
+        default=False,
+        description="Use Vertex AI even when an API key is also configured "
+        "(GOOGLE_GENAI_USE_VERTEXAI=true or GOOGLE_GENAI_USE_ENTERPRISE=true)",
     )
 
 
@@ -91,6 +126,20 @@ class Config(BaseModel):
     storage: StorageConfig = Field(default_factory=lambda: StorageConfig())
     server: ServerConfig = Field(default_factory=lambda: ServerConfig())
     vertex: VertexConfig = Field(default_factory=lambda: VertexConfig())
+
+    @property
+    def backend(self) -> str:
+        """Which Google backend serves requests.
+
+        An API key selects the Gemini API. Vertex AI is used when it is
+        explicitly preferred, or when a project is configured and no API
+        key is set.
+        """
+        if self.vertex.prefer:
+            return BACKEND_VERTEX_AI
+        if self.vertex.enabled and not self.imagen.api_key:
+            return BACKEND_VERTEX_AI
+        return BACKEND_GEMINI_API
 
     @classmethod
     def load(cls, config_path: Optional[Path] = None) -> "Config":
@@ -115,11 +164,17 @@ class Config(BaseModel):
         if api_key:
             config_data.setdefault("imagen", {})["api_key"] = api_key
 
-        # Auto-detect Vertex AI
+        # Auto-detect Vertex AI. These are the same variables the
+        # google-genai SDK and google-github-actions/auth use.
         project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
         if project_id:
             config_data.setdefault("vertex", {})["project_id"] = project_id
             config_data["vertex"]["enabled"] = True
+        location = os.getenv("GOOGLE_CLOUD_LOCATION")
+        if location:
+            config_data.setdefault("vertex", {})["location"] = location
+        if prefer_vertex_from_env():
+            config_data.setdefault("vertex", {})["prefer"] = True
 
         return cls(**config_data)
 
