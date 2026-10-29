@@ -38,6 +38,9 @@ jobs:
           # The default flash model ended the review with MALFORMED_FUNCTION_CALL
           # before calling any tool; the pro model handles the MCP tool schemas.
           gemini_model: gemini-3.1-pro-preview
+          # Reviews last posted with the CLI that was current in March 2026. Later
+          # releases end the run with MALFORMED_FUNCTION_CALL before any tool call.
+          gemini_cli_version: 0.35.3
           github_pr_number: ${{ github.event.pull_request.number || github.event.issue.number }}
           settings: |-
             {
