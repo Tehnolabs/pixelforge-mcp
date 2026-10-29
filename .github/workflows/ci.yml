@@ -51,6 +51,11 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # One live run at a time: the image models' per-minute quota is shared
+    # across runs, and parallel runs trip it.
+    concurrency:
+      group: integration-live
+      cancel-in-progress: false
 
     steps:
       - uses: actions/checkout@v7
