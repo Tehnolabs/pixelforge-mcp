@@ -20,7 +20,8 @@ An MCP server for AI-powered image generation, editing, analysis, and transforma
 - **Prompt template library** — 24 curated templates across 10 categories
 - **Generation history** — full audit trail with search and pagination
 - **Batch processing** — generate up to 10 images in parallel
-- **Optional Vertex AI** — upscaling (x2/x4) and advanced editing modes
+- **Generative upscale and mode-driven editing** — upscale to the next 1K/2K/4K tier, inpaint, outpaint, background swap, style transfer, product shots
+- **Two backends** — Gemini API key, or Vertex AI with a service account / Application Default Credentials
 - **Thinking mode & grounding** — extended reasoning and Google Search for analysis
 - 14 aspect ratios (including panoramic) and temperature control
 - Async-first architecture with full Pydantic validation
@@ -28,7 +29,7 @@ An MCP server for AI-powered image generation, editing, analysis, and transforma
 
 ## Quick Start
 
-**Requirements:** Python 3.10+ and a [Google API key](https://aistudio.google.com/apikey)
+**Requirements:** Python 3.10+ and a [Google API key](https://aistudio.google.com/apikey) or a Google Cloud project with Vertex AI (see [Authentication](#authentication))
 
 ### Install
 
@@ -113,6 +114,53 @@ Restart Claude Desktop after saving.
 
 Ask Claude to generate, edit, or analyze images — all 19 tools are available automatically.
 
+## Authentication
+
+PixelForge talks to Google through one of two backends. Every tool runs on either.
+
+### Gemini API key
+
+Set any one of these variables. Get a key at [Google AI Studio](https://aistudio.google.com/apikey).
+
+| Variable | Notes |
+|----------|-------|
+| `GOOGLE_API_KEY` | Standard |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | Alternative |
+| `GEMINI_API_KEY` | Alternative |
+
+### Vertex AI
+
+Use a Google Cloud project with the Vertex AI API enabled and [Application Default Credentials](https://cloud.google.com/docs/authentication/application-default-credentials): a service account key file, `gcloud auth application-default login`, or the attached identity when running on Google Cloud. The identity needs the Vertex AI User role (`roles/aiplatform.user`). No extra packages are required.
+
+| Variable | Notes |
+|----------|-------|
+| `GOOGLE_CLOUD_PROJECT` | Project ID. Setting it enables the Vertex AI backend |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Path to a service account key file. Not needed with another ADC source |
+| `GOOGLE_CLOUD_LOCATION` | Vertex AI location. Default `global`; the current Gemini image and text models are served from the global endpoint |
+| `GOOGLE_GENAI_USE_VERTEXAI` | `true` to use Vertex AI even when an API key is also set (`GOOGLE_GENAI_USE_ENTERPRISE` is accepted as well) |
+
+```json
+{
+  "mcpServers": {
+    "pixelforge": {
+      "command": "pixelforge-mcp",
+      "env": {
+        "GOOGLE_CLOUD_PROJECT": "my-project",
+        "GOOGLE_APPLICATION_CREDENTIALS": "/path/to/service-account.json"
+      }
+    }
+  }
+}
+```
+
+### Backend selection
+
+- An API key selects the Gemini API.
+- `GOOGLE_CLOUD_PROJECT` with no API key selects Vertex AI.
+- Both set: the API key wins unless `GOOGLE_GENAI_USE_VERTEXAI=true`.
+
+`get_server_info` reports the active backend under `backend.name`.
+
 ## Available Tools
 
 ### Generation
@@ -124,6 +172,8 @@ Ask Claude to generate, edit, or analyze images — all 19 tools are available a
 | `remove_background` | Remove image background (transparent or white) |
 | `transform_image` | Crop, resize, rotate, flip, blur, sharpen, grayscale, or watermark |
 | `batch_generate` | Generate up to 10 images in parallel from multiple prompts |
+| `upscale_image` | Generative upscale to the next 1K/2K/4K tier (re-render with a Gemini image model) |
+| `advanced_edit` | Inpainting, outpainting, background swap, style transfer, product shots (prompt-driven, optional mask guidance) |
 
 ### Analysis
 
@@ -154,18 +204,11 @@ Analysis tools and `optimize_prompt` accept a `model` override. The default is `
 | `list_history` | Browse generation history with pagination and filtering |
 | `get_generation_details` | Get full details of a specific generation |
 
-### Vertex AI (Optional)
-
-| Tool | Description |
-|------|-------------|
-| `upscale_image` | Upscale images x2 or x4 (requires Vertex AI) |
-| `advanced_edit` | Inpainting, outpainting, background swap, style transfer (requires Vertex AI) |
-
 ## Model Selection
 
 PixelForge supports **per-request model switching** with 4 stable Gemini image models:
 
-### Image Models (via Gemini API)
+### Image Models
 
 | Use case | Model | Why |
 |----------|-------|-----|
@@ -175,6 +218,10 @@ PixelForge supports **per-request model switching** with 4 stable Gemini image m
 | Max text fidelity | `gemini-3-pro-image` | Best text rendering, complex multi-turn edits. $0.134/img at 1K/2K |
 
 `gemini-2.5-flash-image` is deprecated (Google has announced its shutdown) and remains only for existing setups. Use `gemini-3.1-flash-lite-image` instead.
+
+`0.5K` is `gemini-3.1-flash-image` only and is sent to the API as `512px`. `generate_image` rejects a size the chosen model cannot output.
+
+`upscale_image` and `advanced_edit` re-render with `gemini-nano-banana-2.1` unless `model` is set. `upscale_image` outputs the smallest of 1K/2K/4K that covers the source times the factor (capped at 4K) and needs a model with 2K/4K output (`gemini-nano-banana-2.1`, `gemini-3.1-flash-image`, or `gemini-3-pro-image`); `gemini-3.1-flash-lite-image` is rejected. Both tools pin the nearest aspect ratio the model supports; models without panoramic output get a standard ratio and a warning.
 
 ### Analysis Models (text)
 
@@ -194,16 +241,6 @@ generate_image(prompt="...", quality="fast")      # gemini-3.1-flash-lite-image
 generate_image(prompt="...", quality="balanced")   # gemini-nano-banana-2.1 + 1K
 generate_image(prompt="...", quality="quality")    # gemini-3-pro-image + 2K
 ```
-
-## Vertex AI (Optional)
-
-For advanced features like image upscaling and specialized editing modes:
-
-1. Set up a Google Cloud project with Vertex AI enabled
-2. Set the environment variable: `GOOGLE_CLOUD_PROJECT=your-project-id`
-3. Install the Vertex AI dependency: `pip install pixelforge-mcp[vertex]`
-
-PixelForge auto-detects Vertex AI credentials and unlocks `upscale_image` and `advanced_edit` tools.
 
 ## Supported Aspect Ratios
 
@@ -248,13 +285,17 @@ Check that pixelforge-mcp is installed:
 pipx list | grep pixelforge
 ```
 
-### Vertex AI features not available
+### "Publisher model ... was not found" (Vertex AI)
 
-Ensure `GOOGLE_CLOUD_PROJECT` is set and `google-cloud-aiplatform` is installed:
+With a regional location in the message, the request went to a regional Vertex AI endpoint. The current Gemini image and text models are served from the global endpoint: set `GOOGLE_CLOUD_LOCATION=global` (the default) or remove a regional override. With `locations/global` in the message, the model ID is unknown or retired on Vertex AI (`list_available_models` lists current IDs), or the project cannot access it yet. The same 404 is returned for retired Imagen model IDs, which PixelForge no longer calls.
 
-```bash
-pip install pixelforge-mcp[vertex]
-```
+### "Rate limit exceeded" or "Permission denied"
+
+The message carries Google's own text. A quota `limit: 0`, or "has not been used in project ... or it is disabled", is a project setup limit rather than a model problem: enable the Vertex AI API (or the Generative Language API for an API key), grant `roles/aiplatform.user`, or request a quota increase.
+
+### "No credentials found"
+
+Set an API key, or `GOOGLE_CLOUD_PROJECT` with Application Default Credentials. See [Authentication](#authentication).
 
 ## Documentation
 
