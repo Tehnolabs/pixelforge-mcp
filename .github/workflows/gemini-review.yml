@@ -24,21 +24,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
+      # The action pipes the prompt to the CLI verbatim, so values are
+      # interpolated here with workflow expressions rather than shell variables.
+      # On issue_comment events the PR number is under issue.number.
       - name: Run Gemini PR review
         uses: google-github-actions/run-gemini-cli@v0
         env:
           GEMINI_CLI_TRUST_WORKSPACE: "true"
           GITHUB_TOKEN: ${{ github.token }}
-          PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
-          REPOSITORY: ${{ github.repository }}
-          ADDITIONAL_CONTEXT: ${{ inputs.additional_context }}
         with:
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           upload_artifacts: true
+          github_pr_number: ${{ github.event.pull_request.number || github.event.issue.number }}
           settings: |-
             {
               "model": {
-                "modelName": "gemini-3.1-pro-preview",
                 "maxSessionTurns": 50
               },
               "mcpServers": {
@@ -60,30 +60,32 @@ jobs:
                 }
               },
               "tools": {
-                "core": [
-                  "run_shell_command(cat)",
-                  "run_shell_command(grep)",
-                  "run_shell_command(head)",
-                  "run_shell_command(tail)"
-                ]
+                "core": []
               }
             }
           prompt: |-
             You are a code reviewer for pixelforge-mcp, a Python MCP server
             for AI-powered image generation using Google Gemini models.
 
-            Review pull request #${PULL_REQUEST_NUMBER} in ${REPOSITORY}.
+            Repository: ${{ github.repository }}
+            Pull request number: ${{ github.event.pull_request.number || github.event.issue.number }}
 
-            Use the GitHub MCP tools to:
-            1. Read the pull request diff
-            2. Analyze changes for:
+            Use the GitHub MCP tools for everything below. Do not run shell commands.
+
+            1. Call `pull_request_read` with method `get` for the title and description,
+               then with method `get_diff` for the changes.
+            2. Use the built-in file tools to read any changed file that needs more context.
+            3. Analyze the changes for:
                - Correctness and potential bugs
                - Security issues (API key handling, input validation)
                - Python best practices and type safety
                - Test coverage gaps
-            3. Post inline comments on lines with issues (include severity: Critical/High/Medium/Low)
-            4. Submit a review summary
+            4. Call `pull_request_review_write` with method `create` to open a pending review.
+            5. For each finding, call `add_comment_to_pending_review` on the changed line.
+               Start the comment with a severity tag: [Critical], [High], [Medium] or [Low].
+               Comment only on lines that appear in the diff.
+            6. Call `pull_request_review_write` with method `submit_pending`, event `COMMENT`,
+               and a short summary. Never use APPROVE or REQUEST_CHANGES.
+            7. If there are no findings, still submit the review with a short summary.
 
-            Use COMMENT event type only. Never use APPROVE or REQUEST_CHANGES.
-
-            Additional context from the reviewer: ${ADDITIONAL_CONTEXT}
+            Additional context from the reviewer: ${{ inputs.additional_context }}
