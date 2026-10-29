@@ -16,6 +16,8 @@ pipx install pixelforge-mcp
 
 ## Configure
 
+The examples below use a Gemini API key. To use a Google Cloud service account instead, replace `GOOGLE_API_KEY` with `GOOGLE_CLOUD_PROJECT` and `GOOGLE_APPLICATION_CREDENTIALS` as shown in [Service account instead of an API key](#service-account-instead-of-an-api-key).
+
 ### Claude Code
 
 ```bash
@@ -108,6 +110,39 @@ Every tool can run through Vertex AI instead of an API key. Credentials come fro
 
 Selection: an API key selects the Gemini API; `GOOGLE_CLOUD_PROJECT` with no key selects Vertex AI; with both, the key wins unless `GOOGLE_GENAI_USE_VERTEXAI=true`. `get_server_info` reports the active backend under `backend.name`.
 
+### Service account instead of an API key
+
+One-time setup with the gcloud CLI, using your own project ID:
+
+```bash
+PROJECT_ID="YOUR_PROJECT_ID"
+SA="pixelforge-sa@${PROJECT_ID}.iam.gserviceaccount.com"
+
+# 1. Enable Vertex AI in the project
+gcloud services enable aiplatform.googleapis.com --project="$PROJECT_ID"
+
+# 2. Create the service account and grant it the Vertex AI User role
+gcloud iam service-accounts create pixelforge-sa --project="$PROJECT_ID"
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:$SA" --role="roles/aiplatform.user"
+
+# 3. Create a key file outside any repository
+mkdir -p ~/.config/pixelforge
+gcloud iam service-accounts keys create ~/.config/pixelforge/service-account.json \
+  --iam-account="$SA"
+```
+
+Then configure the client with `GOOGLE_CLOUD_PROJECT` and `GOOGLE_APPLICATION_CREDENTIALS` in place of `GOOGLE_API_KEY`:
+
+```bash
+claude mcp add pixelforge --scope user \
+  -e GOOGLE_CLOUD_PROJECT="YOUR_PROJECT_ID" \
+  -e GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/pixelforge/service-account.json" \
+  -- pixelforge-mcp
+```
+
+JSON-configured clients take the same two keys in `env`. Verify with `get_server_info` (`backend.name` is `vertex_ai`). An API key variable set anywhere in the environment takes precedence: unset it or set `GOOGLE_GENAI_USE_VERTEXAI=true`. Keep the key file out of version control. Commands for every client: [docs/configuration.md](docs/configuration.md#use-a-service-account-instead-of-an-api-key).
+
 ## Available Tools (19)
 
 ### Generation
@@ -182,7 +217,7 @@ pipx upgrade pixelforge-mcp
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-**"Invalid API key"** — Verify your key at [Google AI Studio](https://aistudio.google.com/apikey) and ensure Gemini API access is enabled.
+**"Invalid API key"** — Verify your key at [Google AI Studio](https://aistudio.google.com/apikey) and ensure Gemini API access is enabled. If you meant to use a service account, an API key variable set anywhere in the environment takes precedence: unset it or set `GOOGLE_GENAI_USE_VERTEXAI=true`.
 
 **"Publisher model ... was not found" (Vertex AI)** — With a regional location in the message, set `GOOGLE_CLOUD_LOCATION=global` (the default); the current Gemini image and text models are served from the global endpoint. With `locations/global` in the message, the model ID is unknown or retired on Vertex AI (`list_available_models` lists current IDs), or the project cannot access it yet.
 
