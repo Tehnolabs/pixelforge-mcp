@@ -1,0 +1,45 @@
+{
+  "name": "pixelforge",
+  "version": "0.7.0",
+  "description": "Generate, edit, analyze and transform images with Google Gemini image models through the pixelforge-mcp server, with skills for hero images, social cards, icon sets, diagrams, consistent characters and setup.",
+  "author": {
+    "name": "Tehnolabs",
+    "url": "https://github.com/Tehnolabs"
+  },
+  "homepage": "https://github.com/Tehnolabs/pixelforge-mcp",
+  "repository": "https://github.com/Tehnolabs/pixelforge-mcp",
+  "license": "AGPL-3.0-or-later",
+  "keywords": [
+    "image-generation",
+    "image-editing",
+    "gemini",
+    "nano-banana",
+    "mcp"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./mcp/codex.json",
+  "interface": {
+    "displayName": "PixelForge",
+    "shortDescription": "Gemini image generation",
+    "longDescription": "Generate, edit, analyze and transform images with Google Gemini image models through the pixelforge-mcp server, with skills for hero images, social cards, icon sets, diagrams, consistent characters and setup. Needs GOOGLE_API_KEY, or GOOGLE_CLOUD_PROJECT plus GOOGLE_APPLICATION_CREDENTIALS, exported in the shell that launches Codex.",
+    "developerName": "Tehnolabs",
+    "category": "Creativity",
+    "capabilities": [
+      "Generate images",
+      "Edit images",
+      "Analyze images"
+    ],
+    "websiteURL": "https://github.com/Tehnolabs/pixelforge-mcp",
+    "defaultPrompt": [
+      "Generate a 16:9 hero image for this project's README",
+      "Remove the background from this product photo"
+    ],
+    "composerIcon": "./assets/icon.svg",
+    "logo": "./assets/icon.svg"
+  },
+  "extensions": {
+    "com.openai": {
+      "onboardingSkill": "./skills/pixelforge-setup/SKILL.md"
+    }
+  }
+}

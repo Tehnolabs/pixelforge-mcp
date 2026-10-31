@@ -1,0 +1,16 @@
+{
+  "name": "pixelforge",
+  "owner": {
+    "name": "Tehnolabs"
+  },
+  "metadata": {
+    "description": "Plugins for the PixelForge image MCP server"
+  },
+  "plugins": [
+    {
+      "name": "pixelforge",
+      "source": "./plugins/pixelforge",
+      "description": "Image generation, editing and analysis with Google Gemini image models, plus workflow skills."
+    }
+  ]
+}

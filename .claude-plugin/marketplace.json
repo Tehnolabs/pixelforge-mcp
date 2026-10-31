@@ -1,0 +1,24 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "pixelforge",
+  "owner": {
+    "name": "Tehnolabs",
+    "url": "https://github.com/Tehnolabs"
+  },
+  "metadata": {
+    "description": "Plugins for the PixelForge image MCP server",
+    "version": "0.7.0"
+  },
+  "plugins": [
+    {
+      "name": "pixelforge",
+      "source": "./plugins/pixelforge",
+      "description": "Image generation, editing and analysis with Google Gemini image models, plus workflow skills.",
+      "tags": [
+        "images",
+        "gemini",
+        "mcp"
+      ]
+    }
+  ]
+}

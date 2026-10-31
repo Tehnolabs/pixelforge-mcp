@@ -1,0 +1,44 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "pixelforge",
+  "displayName": "PixelForge",
+  "version": "0.7.0",
+  "description": "Generate, edit, analyze and transform images with Google Gemini image models through the pixelforge-mcp server, with skills for hero images, social cards, icon sets, diagrams, consistent characters and setup.",
+  "author": {
+    "name": "Tehnolabs",
+    "url": "https://github.com/Tehnolabs"
+  },
+  "homepage": "https://github.com/Tehnolabs/pixelforge-mcp",
+  "repository": "https://github.com/Tehnolabs/pixelforge-mcp",
+  "license": "AGPL-3.0-or-later",
+  "keywords": [
+    "image-generation",
+    "image-editing",
+    "gemini",
+    "nano-banana",
+    "mcp"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./mcp/claude.json",
+  "userConfig": {
+    "google_api_key": {
+      "type": "string",
+      "title": "Google API key",
+      "sensitive": true,
+      "required": false,
+      "description": "Gemini API key from Google AI Studio. Leave empty to authenticate with a Google Cloud service account instead."
+    },
+    "google_cloud_project": {
+      "type": "string",
+      "title": "Google Cloud project ID",
+      "required": false,
+      "description": "Selects the Vertex AI backend. Leave empty when using an API key."
+    },
+    "google_application_credentials": {
+      "type": "file",
+      "title": "Service account key file",
+      "required": false,
+      "description": "Path to a service account JSON key with the Vertex AI User role. Leave empty when using an API key or another Application Default Credentials source."
+    }
+  }
+}
