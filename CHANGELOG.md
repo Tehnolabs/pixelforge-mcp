@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Plugin bundle under `plugins/pixelforge` for Claude Code, Codex and Cursor: one shared `skills/` folder (Agent Skills standard) with seven skills (`pixelforge-setup`, `pixelforge-generate`, `pixelforge-edit`, `pixelforge-analyze`, `pixelforge-web-assets`, `pixelforge-diagrams`, `pixelforge-characters`), a manifest and MCP file per client, and marketplace files at the repository root (`claude plugin install pixelforge --marketplace Tehnolabs/pixelforge-mcp`, `codex plugin add pixelforge@pixelforge`, Cursor "From GitHub Repository")
+- The plugin launches the server with `uvx pixelforge-mcp@latest`, so plugin users run the current release without a pinned version
+- MCP server `instructions` (tool routing, size and ratio rules, cost and credential hints) sent to every client at session start
+- `scripts/set_version.py` updates the version in the package, the config default, the example config and the plugin manifests together; unit tests fail when they drift
+- CI job that validates the plugin with `claude plugin validate --strict` and Cursor's published schemas, and checks that plugin files never reach the PyPI sdist
+- ADR-004 documenting the plugin layout and the per-client credential mechanisms
+
+### Changed
+
+- Empty or unexpanded environment placeholders (for example `${user_config.google_api_key}` from a plugin host) are treated as unset, so they no longer masquerade as an API key or a credentials path
+
 ## [0.7.0] - 2026-10-29
 
 ### Added

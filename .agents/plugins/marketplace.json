@@ -1,0 +1,20 @@
+{
+  "name": "pixelforge",
+  "interface": {
+    "displayName": "PixelForge"
+  },
+  "plugins": [
+    {
+      "name": "pixelforge",
+      "source": {
+        "source": "local",
+        "path": "./plugins/pixelforge"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Creativity"
+    }
+  ]
+}

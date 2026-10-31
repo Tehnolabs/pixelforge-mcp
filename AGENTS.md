@@ -306,12 +306,30 @@ Then add tests in `tests/unit/` covering the new validation rules and API client
 
 ## Version Bumping
 
-Version lives in **two places** — both must be updated together:
+The version is recorded in the package metadata, the server config default, the example config and the plugin manifests. Set it everywhere with one command; `tests/unit/test_set_version.py` and `tests/unit/test_plugin_manifests.py` fail when any copy drifts:
 
-- `pyproject.toml` → `version = "X.Y.Z"` (line 3)
-- `src/pixelforge_mcp/config.py` → `version: str = Field("X.Y.Z", ...)` (line 55)
+```bash
+python scripts/set_version.py X.Y.Z
+```
+
+Locations it touches: `pyproject.toml`, `src/pixelforge_mcp/config.py`, `config/config.example.yaml`, `plugins/pixelforge/.claude-plugin/plugin.json`, `plugins/pixelforge/.codex-plugin/plugin.json`, `plugins/pixelforge/.cursor-plugin/plugin.json`, `.claude-plugin/marketplace.json`.
 
 **When to bump:** Ask the user before bumping. After bumping, add a CHANGELOG entry under the new version.
+
+## Plugin Bundle (Claude Code, Codex, Cursor)
+
+`plugins/pixelforge/` is one plugin read by three clients. Shared: `skills/<name>/SKILL.md` (Agent Skills standard: frontmatter `name`, `description`, optional `allowed-tools` only; `name` equals the directory; under 200 lines; long tables in `references/`). Per client: `.claude-plugin/plugin.json` + `mcp/claude.json` (credentials through `userConfig` and `${user_config.*}`), `.codex-plugin/plugin.json` + `mcp/codex.json` (credentials through the `env_vars` passthrough list), `.cursor-plugin/plugin.json` + `mcp/cursor.json` (credentials through plugin `variables` and `${VAR}`). Never add a root `plugin.json`, `.mcp.json` or `mcp.json` to the plugin directory: Codex and Cursor would read them with different semantics. Marketplace files live at the repository root: `.claude-plugin/marketplace.json`, `.agents/plugins/marketplace.json`, `.cursor-plugin/marketplace.json`.
+
+The server is launched as `uvx pixelforge-mcp@latest`. Routing rules shared with every client, plugin or not, live in `src/pixelforge_mcp/instructions.py` (under 4,096 characters, checked by tests).
+
+Validate before opening a PR:
+
+```bash
+claude plugin validate --strict ./plugins/pixelforge && claude plugin validate .
+pytest tests/unit/test_plugin_manifests.py -q
+```
+
+Design record: `docs/adr/004-agent-plugins-and-skills.md`.
 
 ## Releasing
 

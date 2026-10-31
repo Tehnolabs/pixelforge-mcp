@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "pixelforge": {
+      "command": "uvx",
+      "args": [
+        "pixelforge-mcp@latest"
+      ],
+      "env_vars": [
+        "GOOGLE_API_KEY",
+        "GOOGLE_GENERATIVE_AI_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_CLOUD_LOCATION",
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "GOOGLE_GENAI_USE_ENTERPRISE"
+      ],
+      "startup_timeout_sec": 90
+    }
+  }
+}

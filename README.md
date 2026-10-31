@@ -33,6 +33,20 @@ An MCP server for AI-powered image generation, editing, analysis, and transforma
 
 ### Install
 
+The quickest route in Claude Code, Codex or Cursor is the plugin, which starts the server with `uvx pixelforge-mcp@latest` (needs [uv](https://docs.astral.sh/uv/getting-started/installation/)) and adds seven workflow skills:
+
+```bash
+# Claude Code
+/plugin install pixelforge --marketplace Tehnolabs/pixelforge-mcp
+
+# Codex
+codex plugin marketplace add Tehnolabs/pixelforge-mcp && codex plugin add pixelforge@pixelforge
+
+# Cursor: Customize -> From GitHub Repository -> https://github.com/Tehnolabs/pixelforge-mcp
+```
+
+See [plugins/pixelforge/README.md](plugins/pixelforge/README.md) for credentials per client and the skill list. For any other client, or a manual setup, install the server once:
+
 ```bash
 pipx install pixelforge-mcp
 ```
@@ -339,6 +353,8 @@ The message carries Google's own text. A quota `limit: 0`, or "has not been used
 Set an API key, or `GOOGLE_CLOUD_PROJECT` with Application Default Credentials. See [Authentication](#authentication).
 
 ## Documentation
+
+- [Plugin for Claude Code, Codex and Cursor](plugins/pixelforge/README.md) and [ADR-004](docs/adr/004-agent-plugins-and-skills.md) on how the bundle is laid out
 
 - [Configuration Guide](docs/configuration.md) — detailed setup and environment options
 - [Changelog](CHANGELOG.md) — version history

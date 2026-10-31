@@ -10,6 +10,7 @@ from fastmcp import FastMCP
 from pydantic import ValidationError
 
 from .config import get_config
+from .instructions import SERVER_INSTRUCTIONS
 from .utils.api_client import GenerationResult, ImagenAPIClient
 from .utils.validation import (
     COST_TABLE,
@@ -40,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 # Initialize FastMCP server
-mcp = FastMCP("pixelforge-mcp")
+mcp = FastMCP("pixelforge-mcp", instructions=SERVER_INSTRUCTIONS)
 
 
 # Initialize API client (will be set on first use)
