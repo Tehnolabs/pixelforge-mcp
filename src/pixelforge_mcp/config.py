@@ -1,6 +1,7 @@
 """Configuration management for the PixelForge MCP server."""
 
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -87,6 +88,24 @@ def env_flag(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in _TRUTHY
 
 
+# Plugin hosts substitute user-provided settings into the server
+# environment. An option the user left empty arrives as "" or, in some
+# hosts, as the unexpanded placeholder (for example ${user_config.key}).
+# Neither is a usable value.
+_PLACEHOLDER = re.compile(r"^\$\{[^}]*\}$")
+
+
+def env_value(name: str) -> Optional[str]:
+    """Return a non-empty environment variable, ignoring placeholders."""
+    value = os.getenv(name)
+    if value is None:
+        return None
+    value = value.strip()
+    if not value or _PLACEHOLDER.match(value):
+        return None
+    return value
+
+
 def prefer_vertex_from_env() -> bool:
     """True when either SDK switch asks for Vertex AI."""
     return any(env_flag(name) for name in VERTEX_SWITCH_ENV_VARS)
@@ -157,20 +176,24 @@ class Config(BaseModel):
         # Override with environment variables
         # Try multiple common env var names
         api_key = (
-            os.getenv("GOOGLE_API_KEY")
-            or os.getenv("GOOGLE_GENERATIVE_AI_API_KEY")
-            or os.getenv("GEMINI_API_KEY")
+            env_value("GOOGLE_API_KEY")
+            or env_value("GOOGLE_GENERATIVE_AI_API_KEY")
+            or env_value("GEMINI_API_KEY")
         )
         if api_key:
             config_data.setdefault("imagen", {})["api_key"] = api_key
 
         # Auto-detect Vertex AI. These are the same variables the
         # google-genai SDK and google-github-actions/auth use.
-        project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
+        project_id = env_value("GOOGLE_CLOUD_PROJECT")
         if project_id:
             config_data.setdefault("vertex", {})["project_id"] = project_id
             config_data["vertex"]["enabled"] = True
-        location = os.getenv("GOOGLE_CLOUD_LOCATION")
+        # google-auth reads this variable itself; an empty or unexpanded
+        # value would make it fail with a missing-file error.
+        if env_value("GOOGLE_APPLICATION_CREDENTIALS") is None:
+            os.environ.pop("GOOGLE_APPLICATION_CREDENTIALS", None)
+        location = env_value("GOOGLE_CLOUD_LOCATION")
         if location:
             config_data.setdefault("vertex", {})["location"] = location
         if prefer_vertex_from_env():
