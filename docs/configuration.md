@@ -13,6 +13,18 @@ which pixelforge-mcp
 # Expected: ~/.local/bin/pixelforge-mcp
 ```
 
+## Plugin Install (Claude Code, Codex, Cursor)
+
+The plugin bundles the server and seven workflow skills and starts the server with `uvx pixelforge-mcp@latest`, so it needs [uv](https://docs.astral.sh/uv/getting-started/installation/) rather than pipx.
+
+| Client | Install | Credentials |
+|--------|---------|-------------|
+| Claude Code | `/plugin install pixelforge --marketplace Tehnolabs/pixelforge-mcp` | Prompted in `/plugin` (stored in the credential store) |
+| Codex | `codex plugin marketplace add Tehnolabs/pixelforge-mcp` then `codex plugin add pixelforge@pixelforge` | Exported in the shell that launches Codex |
+| Cursor | Customize → From GitHub Repository → `https://github.com/Tehnolabs/pixelforge-mcp` | The plugin's configuration form |
+
+Details, including how to migrate from a `claude mcp add` setup, are in [plugins/pixelforge/README.md](../plugins/pixelforge/README.md). The sections below cover the manual, server-only setup.
+
 ## Client Configuration
 
 The examples below use a Gemini API key. To use a Google Cloud service account instead, replace `GOOGLE_API_KEY` with `GOOGLE_CLOUD_PROJECT` and `GOOGLE_APPLICATION_CREDENTIALS` as shown in [Use a service account instead of an API key](#use-a-service-account-instead-of-an-api-key).
