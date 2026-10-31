@@ -37,27 +37,27 @@ JSON_LOCATIONS: List[Tuple[str, Tuple[str, ...]]] = [
 
 
 def set_text_version(path: Path, pattern: str, version: str) -> bool:
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     new_text, count = re.subn(
         pattern, lambda m: f"{m.group(1)}{version}{m.group(3)}", text, flags=re.M
     )
     if count != 1:
         raise SystemExit(f"{path}: expected one version match, found {count}")
     if new_text != text:
-        path.write_text(new_text)
+        path.write_text(new_text, encoding="utf-8")
         return True
     return False
 
 
 def set_json_version(path: Path, keys: Tuple[str, ...], version: str) -> bool:
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     node = data
     for key in keys[:-1]:
         node = node[key]
     if node.get(keys[-1]) == version:
         return False
     node[keys[-1]] = version
-    path.write_text(json.dumps(data, indent=2) + "\n")
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     return True
 
 

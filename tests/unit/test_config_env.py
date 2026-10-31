@@ -1,5 +1,7 @@
 """Environment values that plugin hosts may leave empty or unexpanded."""
 
+from pathlib import Path
+
 import pytest
 
 from pixelforge_mcp.config import Config, env_value
@@ -24,7 +26,7 @@ def test_env_value_returns_real_values(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_placeholder_api_key_does_not_shadow_service_account(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pytest.TempPathFactory
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     for name in ("GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "GEMINI_API_KEY"):
         monkeypatch.setenv(name, "${user_config.google_api_key}")
@@ -33,7 +35,7 @@ def test_placeholder_api_key_does_not_shadow_service_account(
     monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
     monkeypatch.delenv("GOOGLE_GENAI_USE_ENTERPRISE", raising=False)
 
-    config = Config.load(tmp_path / "missing.yaml")  # type: ignore[operator]
+    config = Config.load(tmp_path / "missing.yaml")
 
     assert config.imagen.api_key is None
     assert config.vertex.enabled is True

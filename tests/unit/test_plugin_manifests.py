@@ -44,13 +44,13 @@ EXPECTED_SKILLS = {
 
 
 def load_json(path: Path) -> Dict[str, Any]:
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     assert isinstance(data, dict)
     return data
 
 
 def package_version() -> str:
-    text = (ROOT / "pyproject.toml").read_text()
+    text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     match = re.search(r'^version = "([^"]+)"', text, re.MULTILINE)
     assert match
     return match.group(1)
@@ -74,7 +74,7 @@ def mcp_files() -> Dict[str, Dict[str, Any]]:
 
 
 def frontmatter(skill_md: Path) -> Dict[str, Any]:
-    text = skill_md.read_text()
+    text = skill_md.read_text(encoding="utf-8")
     assert text.startswith("---\n"), f"{skill_md}: frontmatter must start on line 1"
     end = text.index("\n---", 4)
     data = yaml.safe_load(text[4:end])
@@ -195,7 +195,7 @@ def test_descriptions_are_within_limits(manifests: Dict[str, Dict[str, Any]]) ->
 
 
 def test_plugin_readme_is_substantial() -> None:
-    words = (PLUGIN / "README.md").read_text().split()
+    words = (PLUGIN / "README.md").read_text(encoding="utf-8").split()
     assert len(words) >= 40
 
 
@@ -252,7 +252,7 @@ def test_skill_frontmatter_follows_the_open_standard(skill: str) -> None:
 @pytest.mark.parametrize("skill", sorted(EXPECTED_SKILLS))
 def test_skill_body_is_short_and_self_contained(skill: str) -> None:
     skill_md = SKILLS / skill / "SKILL.md"
-    lines = skill_md.read_text().splitlines()
+    lines = skill_md.read_text(encoding="utf-8").splitlines()
     assert len(lines) <= 200, f"{skill}: SKILL.md has {len(lines)} lines"
     text = "\n".join(lines)
     body = text.split("\n---", 2)[-1]
@@ -263,7 +263,7 @@ def test_skill_body_is_short_and_self_contained(skill: str) -> None:
     existing = {p.name for p in refs_dir.glob("*.md")} if refs_dir.is_dir() else set()
     assert mentioned == existing, f"{skill}: references mismatch {mentioned ^ existing}"
     for ref in existing:
-        ref_lines = (refs_dir / ref).read_text().splitlines()
+        ref_lines = (refs_dir / ref).read_text(encoding="utf-8").splitlines()
         assert len(ref_lines) <= 400, f"{skill}/references/{ref} is too long"
     for path in (SKILLS / skill).rglob("*"):
         depth = len(path.relative_to(SKILLS / skill).parts)
@@ -275,7 +275,9 @@ def test_skill_mentions_only_real_models(skill: str) -> None:
     known = set(IMAGE_MODELS) | set(ANALYSIS_MODELS)
     for path in (SKILLS / skill).rglob("*.md"):
         # Model IDs start with a digit or "nano"; "gemini-api" in URLs is not one.
-        found = re.findall(r"gemini-(?:\d|nano)[a-z0-9.\-]*", path.read_text())
+        found = re.findall(
+            r"gemini-(?:\d|nano)[a-z0-9.\-]*", path.read_text(encoding="utf-8")
+        )
         mentioned = {m.rstrip(".,;:)") for m in found}
         unknown = mentioned - known
         assert not unknown, f"{path}: unknown model ids {unknown}"

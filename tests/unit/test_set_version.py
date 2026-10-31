@@ -33,11 +33,15 @@ def test_sets_every_location(repo_copy: Path) -> None:
     module = load_module()
     changed = module.set_version(repo_copy, "9.8.7")
     assert all(changed.values()), changed
-    assert 'version = "9.8.7"' in (repo_copy / "pyproject.toml").read_text()
-    config_text = (repo_copy / "src/pixelforge_mcp/config.py").read_text()
+    assert 'version = "9.8.7"' in (repo_copy / "pyproject.toml").read_text(
+        encoding="utf-8"
+    )
+    config_text = (repo_copy / "src/pixelforge_mcp/config.py").read_text(
+        encoding="utf-8"
+    )
     assert 'Field(default="9.8.7"' in config_text
     for rel, keys in module.JSON_LOCATIONS:
-        node = json.loads((repo_copy / rel).read_text())
+        node = json.loads((repo_copy / rel).read_text(encoding="utf-8"))
         for key in keys:
             node = node[key]
         assert node == "9.8.7", rel
@@ -57,11 +61,11 @@ def test_repository_versions_currently_agree() -> None:
     for rel, pattern in module.TEXT_LOCATIONS:
         import re
 
-        match = re.search(pattern, (ROOT / rel).read_text(), re.M)
+        match = re.search(pattern, (ROOT / rel).read_text(encoding="utf-8"), re.M)
         assert match, rel
         versions.add(match.group(2))
     for rel, keys in module.JSON_LOCATIONS:
-        node = json.loads((ROOT / rel).read_text())
+        node = json.loads((ROOT / rel).read_text(encoding="utf-8"))
         for key in keys:
             node = node[key]
         versions.add(node)
