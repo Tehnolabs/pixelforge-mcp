@@ -42,6 +42,54 @@ jobs:
       - name: Unit tests
         run: pytest tests/unit/ -q
 
+  # The plugin bundle under plugins/pixelforge is read by Claude Code,
+  # Codex and Cursor. Validate it with the official Claude Code CLI and
+  # Cursor's published JSON schemas, and make sure it never ships to PyPI.
+  plugin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install the Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Validate the Claude Code plugin and marketplace
+        run: |
+          claude plugin validate --strict ./plugins/pixelforge
+          claude plugin validate .
+
+      # Schemas pinned to a cursor/plugins commit; bump the SHA deliberately.
+      - name: Validate the Cursor manifests against the published schemas
+        env:
+          CURSOR_PLUGINS_SHA: 4dd1d05818d19792e7cd6e818f1667f95f7e1dbe
+        run: |
+          base="https://raw.githubusercontent.com/cursor/plugins/${CURSOR_PLUGINS_SHA}/schemas"
+          curl -sSfL "$base/plugin.schema.json" -o /tmp/cursor-plugin.schema.json
+          curl -sSfL "$base/marketplace.schema.json" -o /tmp/cursor-marketplace.schema.json
+          npx --yes -p ajv-cli@5 -p ajv-formats@3 ajv validate --spec=draft7 -c ajv-formats \
+            -s /tmp/cursor-plugin.schema.json -d plugins/pixelforge/.cursor-plugin/plugin.json
+          npx --yes -p ajv-cli@5 -p ajv-formats@3 ajv validate --spec=draft7 -c ajv-formats \
+            -s /tmp/cursor-marketplace.schema.json -d .cursor-plugin/marketplace.json
+
+      - name: The plugin bundle stays out of the PyPI artifacts
+        run: |
+          python -m pip install --quiet build
+          python -m build --sdist --outdir /tmp/dist
+          if tar tzf /tmp/dist/*.tar.gz | grep -E '/plugins/|/\.claude-plugin/|/\.agents/|/\.cursor-plugin/'; then
+            echo "plugin files leaked into the sdist" >&2
+            exit 1
+          fi
+
   # Live API tests. Forks cannot read repository secrets, so pull requests
   # from forks skip this job and run the unit checks only.
   integration:
