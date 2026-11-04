@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Releases are uploaded to PyPI through Trusted Publishing (OIDC) instead of an API token, so every release carries PEP 740 provenance attestations ([#29](https://github.com/Tehnolabs/pixelforge-mcp/issues/29))
+- `pyproject.toml` declares the license as a PEP 639 expression (`license = "AGPL-3.0-or-later"`, `license-files = ["LICENSE"]`), which clears the setuptools deprecation warnings printed on every build
+
 ## [0.8.0] - 2026-11-04
 
 ### Added
