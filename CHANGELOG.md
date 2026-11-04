@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-04
+
 ### Added
 
 - Plugin bundle under `plugins/pixelforge` for Claude Code, Codex and Cursor: one shared `skills/` folder (Agent Skills standard) with seven skills (`pixelforge-setup`, `pixelforge-generate`, `pixelforge-edit`, `pixelforge-analyze`, `pixelforge-web-assets`, `pixelforge-diagrams`, `pixelforge-characters`), a manifest and MCP file per client, and marketplace files at the repository root (`claude plugin install pixelforge --marketplace Tehnolabs/pixelforge-mcp`, `codex plugin add pixelforge@pixelforge`, Cursor "From GitHub Repository")
@@ -219,7 +221,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 72 unit tests with full coverage
 - PyPI package distribution via pipx
 
-[Unreleased]: https://github.com/tehnolabs/pixelforge-mcp/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/tehnolabs/pixelforge-mcp/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/tehnolabs/pixelforge-mcp/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/tehnolabs/pixelforge-mcp/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/tehnolabs/pixelforge-mcp/compare/v0.5.4...v0.6.0
 [0.5.4]: https://github.com/tehnolabs/pixelforge-mcp/compare/v0.5.3...v0.5.4

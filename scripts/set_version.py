@@ -25,6 +25,7 @@ TEXT_LOCATIONS: List[Tuple[str, str]] = [
     ("pyproject.toml", r'^(version = ")([^"]+)(")'),
     ("src/pixelforge_mcp/config.py", r'(version: str = Field\(default=")([^"]+)(")'),
     ("config/config.example.yaml", r'^(  version: ")([^"]+)(")'),
+    ("tests/unit/test_config.py", r'^(        assert config.version == ")([^"]+)(")'),
 ]
 
 # (relative path, key path inside the JSON document)

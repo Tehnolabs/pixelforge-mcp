@@ -312,7 +312,7 @@ The version is recorded in the package metadata, the server config default, the 
 python scripts/set_version.py X.Y.Z
 ```
 
-Locations it touches: `pyproject.toml`, `src/pixelforge_mcp/config.py`, `config/config.example.yaml`, `plugins/pixelforge/.claude-plugin/plugin.json`, `plugins/pixelforge/.codex-plugin/plugin.json`, `plugins/pixelforge/.cursor-plugin/plugin.json`, `.claude-plugin/marketplace.json`.
+Locations it touches: `pyproject.toml`, `src/pixelforge_mcp/config.py`, `config/config.example.yaml`, `tests/unit/test_config.py`, `plugins/pixelforge/.claude-plugin/plugin.json`, `plugins/pixelforge/.codex-plugin/plugin.json`, `plugins/pixelforge/.cursor-plugin/plugin.json`, `.claude-plugin/marketplace.json`.
 
 **When to bump:** Ask the user before bumping. After bumping, add a CHANGELOG entry under the new version.
 
