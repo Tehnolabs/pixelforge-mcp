@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Releases are uploaded to PyPI through Trusted Publishing (OIDC) instead of an API token, so every release carries PEP 740 provenance attestations ([#29](https://github.com/Tehnolabs/pixelforge-mcp/issues/29))
+
 ## [0.8.0] - 2026-11-04
 
 ### Added

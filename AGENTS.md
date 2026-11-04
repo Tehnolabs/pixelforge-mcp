@@ -333,7 +333,7 @@ Design record: `docs/adr/004-agent-plugins-and-skills.md`.
 
 ## Releasing
 
-Releases are done manually from the command line. The `python-publish.yml` workflow handles PyPI upload automatically when a GitHub Release is created.
+Releases are done manually from the command line. The `python-publish.yml` workflow handles PyPI upload automatically when a GitHub Release is created. It authenticates with PyPI through Trusted Publishing (OIDC, GitHub environment `pypi`), so no PyPI token is stored in the repository secrets, and every upload carries provenance attestations. `gh workflow run python-publish.yml` re-runs the upload for the current version; files already on PyPI are skipped.
 
 ```bash
 # 1. Make sure you're on main with the version already bumped
