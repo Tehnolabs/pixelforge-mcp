@@ -87,7 +87,7 @@ class TestServerConfig:
         """Test ServerConfig uses correct defaults."""
         config = ServerConfig()
         assert config.name == "pixelforge-mcp"
-        assert config.version == "0.7.0"
+        assert config.version == "0.8.0"
         assert config.log_level == "INFO"
 
 
