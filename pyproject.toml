@@ -5,12 +5,12 @@ description = "AI-powered image generation MCP server with multi-model support"
 authors = [{name = "Ahmed Al-Eryani", email = "ahmed@tehnolabs.com"}]
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "AGPL-3.0-or-later"}
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
 keywords = ["mcp", "image-generation", "gemini", "ai", "model-context-protocol"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -57,7 +57,7 @@ pixelforge-mcp = "pixelforge_mcp.server:main"
 pixelforge_mcp = ["templates/*.yaml"]
 
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.black]
